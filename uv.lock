@@ -209,7 +209,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "lagrange-python", git = "https://github.com/HarcicYang/lagrange-python.git" },
     { name = "msgpack", specifier = ">=1.1" },
-    { name = "neony", specifier = ">=0.2.0.post1" },
+    { name = "neony", specifier = ">=0.2.0.post2" },
 ]
 
 [package.metadata.requires-dev]
@@ -310,16 +310,16 @@ wheels = [
 
 [[package]]
 name = "neony"
-version = "0.2.0.post1"
+version = "0.2.0.post2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "lumiview" },
     { name = "pyclip" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/09/81/9cbdd314cc7ef6d3c36d27f92908361f6c08ab1807ac9595e36f923be93d/neony-0.2.0.post1.tar.gz", hash = "sha256:e8d472e31215655f9709b1ef48672cd3f06113499f2ead47f8ed26021aa91ac6", size = 325450, upload-time = "2026-08-14T10:34:24.083Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/c8/6e9802ba4b532c16164bb9c8751cc8c64f64eb76518cc60bed373d5cc831/neony-0.2.0.post2.tar.gz", hash = "sha256:27da6db3f0a8df72bb647136121346a88433f9bd05e071b713f4d81900bbbe47", size = 330300, upload-time = "2026-08-16T15:54:44.402Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/af/1fac5b9a7e3684a61b21656192cca43d149712a43f84f08f62a63cb464d1/neony-0.2.0.post1-py3-none-any.whl", hash = "sha256:3bde36645fe6ee5bffc1322c1a31b0fca7a27eabbe564196bf6fc62efafd6053", size = 278794, upload-time = "2026-08-14T10:34:22.446Z" },
+    { url = "https://files.pythonhosted.org/packages/23/15/fbd39084b0a12651b69920e8e303bd4c9b5d8bb4831e54fbe1125e68fe5f/neony-0.2.0.post2-py3-none-any.whl", hash = "sha256:fefb2aec1f6717a1c15243d29f215bb13bb47fef1b66e1eb69d58717f214586c", size = 282249, upload-time = "2026-08-16T15:54:42.711Z" },
 ]
 
 [[package]]
