@@ -1,0 +1,7 @@
+"""核心用例服务。"""
+
+from flaza.core.services.account import AccountService
+from flaza.core.services.contacts import ContactService
+from flaza.core.services.messages import MessageService
+
+__all__ = ["AccountService", "ContactService", "MessageService"]

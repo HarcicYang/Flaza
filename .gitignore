@@ -38,3 +38,7 @@ sig.bin
 
 # OS
 Thumbs.db
+
+# Flaza runtime data
+appconfig.json
+flaza.db

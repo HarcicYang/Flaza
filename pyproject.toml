@@ -13,7 +13,9 @@ authors = [
 ]
 keywords = ["qq", "lagrange", "neony", "desktop", "client"]
 dependencies = [
+    "aiosqlite>=0.20",
     "lagrange-python @ git+https://github.com/LagrangeDev/lagrange-python.git",
+    "msgpack>=1.1",
     "neony>=0.2.0.post1",
 ]
 
@@ -30,6 +32,8 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# 项目文档、注释和界面文案统一使用简体中文，全角标点不是歧义字符。
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
