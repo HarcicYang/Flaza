@@ -23,7 +23,7 @@ from flaza.core.ports import QQClient
 logger = logging.getLogger(__name__)
 
 _QR_POLL_INTERVAL_SECONDS = 2.0
-_SILENT_LOGIN_TIMEOUT_SECONDS = 15.0
+_SILENT_LOGIN_TIMEOUT_SECONDS = 30.0
 
 
 class AccountService:
