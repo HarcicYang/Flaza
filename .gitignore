@@ -42,3 +42,4 @@ Thumbs.db
 # Flaza runtime data
 appconfig.json
 flaza.db
+media_cache/
