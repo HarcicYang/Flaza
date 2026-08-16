@@ -2,6 +2,10 @@
 
 基于 [lagrange-python](https://github.com/LagrangeDev/lagrange-python) 和 [Neony](https://github.com/HarcicYang/Neony) 的 QQ 桌面客户端。
 
+> Flaza 是非官方 QQ 客户端，与腾讯公司无关。本项目仅供学习与技术交流，
+> 使用者应遵守所在地法律法规及 QQ 服务条款，并自行承担账号及相关风险。
+> 详见 [免责声明](#免责声明)
+
 ## 功能覆盖
 
 <details>
@@ -49,22 +53,22 @@
 <details>
 <summary>操作类型</summary>
 
-| 操作             | 状态 | 说明                         |
-| ---------------- | ---- | ---------------------------- |
-| 静默登录         | ✅   | 已有会话时自动登录           |
-| 扫码登录         | ✅   | 二维码内嵌展示               |
-| 密码登录         | ❌   | 未规划                       |
-| 打开 / 新建会话  | ✅   | 好友与群                     |
-| 发送文本消息     | ✅   | 回车发送                     |
+| 操作             | 状态 | 说明                                                   |
+| ---------------- | ---- | ------------------------------------------------------ |
+| 静默登录         | ✅   | 已有会话时自动登录                                     |
+| 扫码登录         | ✅   | 二维码内嵌展示                                         |
+| 密码登录         | ❌   | 未规划                                                 |
+| 打开 / 新建会话  | ✅   | 好友与群                                               |
+| 发送文本消息     | ✅   | 回车发送                                               |
 | 图片全屏预览     | ✅   | Ctrl+滚轮缩放、滚轮平移、鼠标拖拽、1:1、双击、Esc 关闭 |
-| 发送图片等富媒体 | ❌   | 规划中                       |
-| 撤回自己的消息   | ❌   | 未接入                       |
-| 复制 / 删除消息  | ❌   | 右键菜单未接入               |
-| 向上加载历史消息 | 🚧   | 存储层已支持 `list_before()` |
-| 修改登录配置     | ✅   | 保存后重启                   |
-| 切换主题         | ✅   | 即时生效，持久化             |
-| 管理媒体缓存     | ❌   | 自动下载 + LRU，无手动入口   |
-| 处理好友申请     | ❌   | 未接入                       |
+| 发送图片等富媒体 | ❌   | 规划中                                                 |
+| 撤回自己的消息   | ❌   | 未接入                                                 |
+| 复制 / 删除消息  | ❌   | 右键菜单未接入                                         |
+| 向上加载历史消息 | 🚧   | 存储层已支持 `list_before()`                           |
+| 修改登录配置     | ✅   | 保存后重启                                             |
+| 切换主题         | ✅   | 即时生效，持久化                                       |
+| 管理媒体缓存     | ❌   | 自动下载 + LRU，无手动入口                             |
+| 处理好友申请     | ❌   | 未接入                                                 |
 
 </details>
 
@@ -72,47 +76,22 @@
 
 - [ ] 插件系统
 
-## 技术栈
-
-- Python 3.12
-- [uv](https://github.com/astral-sh/uv) 管理依赖
-- [lagrange-python](https://github.com/LagrangeDev/lagrange-python) QQ 协议
-- [Neony](https://github.com/HarcicYang/Neony) UI
-- aiosqlite 本地存储
-- msgpack 消息载荷编码
-- ruff + pyrefly 静态检查
-
-## 项目结构
-
-```text
-src/flaza/
-├── core/                 # 领域模型、事件、端口、服务、存储；不依赖 UI/协议
-│   ├── models/           # 消息元素、会话、联系人等领域模型
-│   ├── services/         # 消息、联系人、媒体缓存等用例服务
-│   └── storage/          # SQLite、repository、msgpack codec
-├── qq/                   # lagrange-python 适配；唯一允许 import lagrange 的模块
-├── ui/                   # Neony UI；页面、组件、状态
-│   ├── components/       # 消息流、会话列表、设置、消息内容渲染器等
-│   └── pages/            # setup / login / home
-├── app.py                # Neony 应用组装
-├── runtime.py            # 对象组装与生命周期
-└── config.py             # appconfig.json 配置模型
-```
-
 ## 快速开始
 
 要求：
 
 - Python 3.12
 - [uv](https://github.com/astral-sh/uv)
-- Linux 桌面环境（GTK / WebKitGTK）
+- [lagrange-python](https://github.com/LagrangeDev/lagrange-python) [^1][^2]
+- Lagrange V2 签名服务（部署与配置见 [签名指南](https://github.com/LagrangeDev/SignApiGuide)）
 
 ```bash
-uv sync --group dev
+uv sync
+uv sync --group dev  # 开发环境
 uv run flaza
 ```
 
-首次启动时会在界面内引导填写登录配置，保存后应用自动重启。
+首次启动时会在界面内引导填写登录配置；`签名服务地址` 与 `签名服务 token` 请按上述签名指南填写，保存后应用自动重启。
 
 ## 运行时数据
 
@@ -123,7 +102,7 @@ uv run flaza
 | `media_cache/`            | 下载到本地的消息媒体文件           | 否       |
 | `device.json` / `sig.bin` | QQ 设备信息与会话签名              | 否       |
 
-媒体缓存默认目录为 `./media_cache`，总量上限 2 GiB（LRU 淘汰），单文件上限 512 MiB，下载并发 2，超时 60 秒。
+媒体缓存默认目录为 `./media_cache`，总量上限 2 GiB，单文件上限 512 MiB，下载并发 2，超时 60 秒。
 
 ## 常用开发命令
 
@@ -136,4 +115,16 @@ uv build
 uv run flaza
 ```
 
-提交信息遵循 Conventional Commits。架构与协作约定见 [docs/design-decisions.md](docs/design-decisions.md)。
+架构与协作约定见 [docs/design-decisions.md](docs/design-decisions.md)。
+
+## 免责声明
+
+- 本项目为非官方 QQ 客户端，与其公司等无任何关联。
+- 项目仅供学习、研究和技术交流，请勿用于任何违反法律法规或 QQ 服务条款的用途。
+- 使用者应自行确认其使用方式符合所在国家或地区的法律要求，并自行承担账号安全、数据丢失、功能受限等一切风险。
+- 项目作者与贡献者不支持、不鼓励一切将本项目用作大批量自动信息提取、恶意自动操作、或者其他不符合法律法规和公序良俗的行为，若您执意将本项目或本项目作者的其他有关项目用作以上行为，由您自行承担有关风险和后果。
+
+
+[^1]: 尽管这里的连接指向 [LagrangeDev](https://github.com/LagrangeDev)，本仓库的依赖项中该包裹指向 [作者自己的 fork](https://github.com/HarcicYang/lagrange-python)。这是因为作者为了本项目，在 fork 中照葫芦画瓢做了一些自己的实现。因此，如果您安装了 LagrangeDev 提供的包裹，该项目可能无法正常运行。
+
+[^2]: 部分环境下，安装有关依赖库可能需要额外配置 openssl 和 rust 开发环境。
