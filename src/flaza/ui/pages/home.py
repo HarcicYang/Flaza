@@ -7,7 +7,8 @@ import contextlib
 from collections.abc import Awaitable, Callable
 
 from neony.application.elements import Progress, Text
-from neony.dom import Div, DOMElement, Styles
+from neony.application.theme import stub
+from neony.dom import Border, Div, DOMElement, Styles
 from neony.dom.reactive import effect
 
 from flaza.config import AppConfig
@@ -35,6 +36,21 @@ _CHAT_HEADER = Styles(
     padding="10px 16px",
     border_bottom="1px solid var(--color-border)",
     flex_shrink="0",
+)
+
+_SYNC_FLOAT = Styles(
+    position="fixed",
+    top="52px",
+    left="50%",
+    transform="translateX(-50%)",
+    width="320px",
+    z_index="1100",
+    padding="12px 16px",
+    border_radius="12px",
+    background_color=stub.surface_glass_bg,
+    backdrop_filter="blur(20px) saturate(1.2)",
+    border=Border(width="1px", color=stub.border_glass),
+    box_shadow="0 12px 40px var(--color-shadow)",
 )
 
 
@@ -73,7 +89,8 @@ class HomePage:
 
         sync_progress = Progress(indeterminate=True, label="正在同步离线消息…")
         sync_root = sync_progress.build()
-        sync_root.bind_visible(state.sync_in_progress)
+        sync_float = Div(styles=_SYNC_FLOAT, container=[sync_root])
+        sync_float.bind_visible(state.sync_in_progress)
 
         right = Div(
             styles=_RIGHT,
@@ -82,7 +99,7 @@ class HomePage:
         body = Div(styles=_BODY, container=[self.session_list.root, right])
         self.root = Div(
             styles=Styles(display="flex", flex_direction="column", width="100%", flex_grow="1", min_height="0"),
-            container=[sync_root, body, self.image_viewer.root],
+            container=[body, sync_float, self.image_viewer.root],
         )
 
         self._apply_state()

@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from neony.application.elements import Button, Icon, Text, TitleBar
-from neony.dom import Computed, Div, DOMElement, DomEvent, Styles
+from neony.application.theme import stub
+from neony.dom import Color, Computed, Div, DOMElement, DomEvent, Styles
 
 from flaza.config import AppConfig
 from flaza.core.events import EventBus, LoginPhaseChanged
@@ -18,6 +19,31 @@ from flaza.ui.pages.setup import SetupPage
 from flaza.ui.state import UiStateStore
 
 _TOOLBAR = Styles(display="flex", align_items="center", gap="6px", flex_shrink="0")
+
+_ICON_BUTTON = Styles(
+    display="flex",
+    align_items="center",
+    justify_content="center",
+    width="32px",
+    height="32px",
+    padding="0",
+    border="none",
+    border_radius="8px",
+    background_color=Color(name="transparent"),
+    color=stub.text_primary,
+    font_size="16px",
+    cursor="pointer",
+)
+
+
+def _icon_button(glyph: str, title: str) -> DOMElement:
+    """构造带 title / aria-label 的紧凑图标按钮。"""
+    button = Button("", variant="ghost", icon=glyph)
+    button.reset_styles(_ICON_BUTTON)
+    element = button.build()
+    element.args["title"] = title
+    element.args["aria-label"] = title
+    return element
 
 
 class ShellView:
@@ -42,11 +68,8 @@ class ShellView:
         titlebar = TitleBar(config.window.title, icon=Icon.image(friend_avatar_url(0)))
         titlebar_root = titlebar.build()
 
-        account = Text("", role="secondary")
-        account.bind_text(
-            state.self_info,
-            fmt=lambda info: f"{info.nickname or str(info.uin)}（{info.uin}）" if info else "未登录",
-        )
+        uin = Text("", role="secondary")
+        uin.bind_text(state.self_info, fmt=lambda info: str(info.uin) if info is not None and info.uin else "")
         connection = Text("", role="secondary")
         connection.bind_text(state.connection_state, fmt=lambda value: f"连接：{value.value}")
 
@@ -57,6 +80,13 @@ class ShellView:
         if not isinstance(left, DOMElement):
             raise RuntimeError("TitleBar 根结构不符合预期")
         icon_el = left.container[0]
+        title_el = left.container[1] if len(left.container) > 1 else None
+        if isinstance(title_el, DOMElement):
+            title_el.bind_text(
+                state.self_info,
+                fmt=lambda info: info.nickname or "Flaza" if info is not None else "Flaza",
+            )
+            title_el.styles = title_el.styles.model_copy(update={"color": stub.text_primary})
         if isinstance(icon_el, DOMElement):
             icon_el.styles = icon_el.styles.model_copy(
                 update={
@@ -74,7 +104,12 @@ class ShellView:
 
             self_uin = Computed(current_uin)
             icon_el.bind_style(self_uin, "background_image", fmt=lambda uin: f"url({friend_avatar_url(int(uin))})")
-        left.container.extend([spacer, account.build(), connection.build(), self._toolbar])
+        uin_el = uin.build()
+        if isinstance(title_el, DOMElement):
+            left.container.insert(2, uin_el)
+        else:
+            left.container.append(uin_el)
+        left.container.extend([spacer, connection.build(), self._toolbar])
 
         self._content = Div(
             styles=Styles(display="flex", flex_direction="column", flex_grow="1", min_height="0", overflow="hidden")
@@ -119,8 +154,8 @@ class ShellView:
             await home.open_settings()
 
         self._toolbar.container.clear()
-        new_chat = Button("新会话", variant="ghost")
+        new_chat = _icon_button("💬", "新会话")
         new_chat.on_click(open_new_chat)
-        settings = Button("设置", variant="ghost")
+        settings = _icon_button("⚙️", "设置")
         settings.on_click(open_settings)
-        self._toolbar.container.extend([new_chat.build(), settings.build()])
+        self._toolbar.container.extend([new_chat, settings])
