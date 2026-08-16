@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+wheels/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test / coverage / linter caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyrefly_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Editors / IDEs
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Runtime data (QQ signer / device files)
+appinfo*.json
+device.json
+sig.bin
+
+# OS
+Thumbs.db

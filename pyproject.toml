@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flaza"
+version = "0.1.0"
+description = "A QQ desktop client built with lagrange-python and Neony"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "HarcicYang" },
+]
+keywords = ["qq", "lagrange", "neony", "desktop", "client"]
+dependencies = [
+    "lagrange-python @ git+https://github.com/LagrangeDev/lagrange-python.git",
+    "neony>=0.2.0.post1",
+]
+
+[project.scripts]
+flaza = "flaza.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["flaza*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.1",
+    "pyrefly>=1.2.0",
+]

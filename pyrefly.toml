@@ -1,0 +1,3 @@
+preset = "strict"
+python-version = "3.12"
+project-includes = ["src", "tests", "main.py"]
