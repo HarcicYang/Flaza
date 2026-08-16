@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -11,6 +12,7 @@ from neony.dom import Div, DOMElement, Span, Styles
 
 from flaza.core.models import ChatTarget, GroupChat, GroupMemberRole, Message, StoredMessage
 from flaza.ui.avatars import friend_avatar_url
+from flaza.ui.components.image_viewer import ImagePreview
 from flaza.ui.components.message_content import build_message_content
 from flaza.ui.state import ChatNotice, UiStateStore
 
@@ -36,8 +38,13 @@ class _RenderedItem:
 class MessageList:
     """可滚动的消息流，按 key 做增量更新。"""
 
-    def __init__(self, state: UiStateStore) -> None:
+    def __init__(
+        self,
+        state: UiStateStore,
+        on_image_click: Callable[[ImagePreview], Awaitable[None]] | None = None,
+    ) -> None:
         self._state = state
+        self._on_image_click = on_image_click
         self._items: dict[str, _RenderedItem] = {}
         self._ordered_keys: list[str] = []
         self._chat_key: str | None = None
@@ -260,7 +267,7 @@ class MessageList:
         role = self._resolve_role(chat, message)
         bubble = MessageBubble(
             text=message.text,
-            content=build_message_content(message),
+            content=build_message_content(message, self._on_image_click),
             from_me=message.from_self,
             name=message.sender_name if isinstance(chat, GroupChat) and not message.from_self else None,
             avatar=avatar,

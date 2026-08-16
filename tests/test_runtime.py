@@ -20,4 +20,4 @@ def test_home_page_can_be_constructed() -> None:
     config = AppConfig(login={"uin": 123, "signer_url": "https://sign.example.com"})
     _app, runtime = build_application(config)
     home = HomePage(runtime.state, runtime.actions, runtime.bus, config, runtime.render)
-    assert len(home.root.container) == 2
+    assert len(home.root.container) == 3

@@ -17,6 +17,7 @@ from flaza.core.events import (
 from flaza.core.models import ChatTarget
 from flaza.ui.actions import UiActions
 from flaza.ui.components.composer import Composer
+from flaza.ui.components.image_viewer import ImageViewer
 from flaza.ui.components.message_list import MessageList
 from flaza.ui.components.new_chat_dialog import NewChatDialog
 from flaza.ui.components.session_list import SessionList
@@ -62,7 +63,8 @@ class HomePage:
         actions.set_chat_view_refresher(self._refresh_async)
 
         self.session_list = SessionList(state, actions, self._on_session_selected)
-        self.message_list = MessageList(state)
+        self.image_viewer = ImageViewer(render)
+        self.message_list = MessageList(state, self.image_viewer.open)
         self.composer = Composer(actions, render)
 
         chat_title = Text("", size="16px", weight="600")
@@ -80,7 +82,7 @@ class HomePage:
         body = Div(styles=_BODY, container=[self.session_list.root, right])
         self.root = Div(
             styles=Styles(display="flex", flex_direction="column", width="100%", flex_grow="1", min_height="0"),
-            container=[sync_root, body],
+            container=[sync_root, body, self.image_viewer.root],
         )
 
         self._apply_state()

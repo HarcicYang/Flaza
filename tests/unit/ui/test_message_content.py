@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from neony.dom import Anchor, Audio, Div, DOMElement, Img, Span, Video
+from neony.dom import Anchor, Audio, Div, DOMElement, DomEvent, Img, Span, Video
 
 from flaza.core.models import (
     AtElement,
@@ -10,6 +10,7 @@ from flaza.core.models import (
     FileElement,
     FriendChat,
     ImageElement,
+    MarketFaceElement,
     Message,
     PokeElement,
     QuoteElement,
@@ -17,6 +18,7 @@ from flaza.core.models import (
     UnknownElement,
     VideoElement,
 )
+from flaza.ui.components.image_viewer import ImagePreview
 from flaza.ui.components.message_content import build_message_content
 
 
@@ -59,6 +61,33 @@ def test_text_and_at_preserve_newlines() -> None:
     assert text_spans
     assert text_spans[0].styles.white_space == "pre-wrap"
     assert any(span.styles.font_weight == "600" for span in spans)
+
+
+def test_text_and_at_share_one_inline_group() -> None:
+    root = build_message_content(
+        _message(TextElement(text="你好 "), AtElement(text="@小明", uin=10001), TextElement(text=" 看这里"))
+    )
+
+    assert len(root.container) == 1
+    group = root.container[0]
+    assert isinstance(group, Span)
+    assert len(group.container) == 3
+    assert all(isinstance(child, DOMElement) for child in group.container)
+
+
+def test_media_splits_inline_text_groups() -> None:
+    root = build_message_content(
+        _message(
+            TextElement(text="看图"),
+            ImageElement(url="https://example.com/pic.png"),
+            TextElement(text="图后文本"),
+        )
+    )
+
+    assert len(root.container) == 3
+    assert isinstance(root.container[0], Span)
+    assert isinstance(root.container[1], Img)
+    assert isinstance(root.container[2], Span)
 
 
 def test_image_audio_video_use_native_elements_when_url_present() -> None:
@@ -191,6 +220,52 @@ def test_quote_uses_background_depth_instead_of_border() -> None:
     assert other_blocks[0].styles.background_color is not None
     assert self_blocks[0].styles.background_color is not None
     assert other_blocks[0].styles.background_color != self_blocks[0].styles.background_color
+
+
+def test_image_click_callback_receives_preview() -> None:
+    previews: list[ImagePreview] = []
+
+    async def on_image_click(preview: ImagePreview) -> None:
+        previews.append(preview)
+
+    root = build_message_content(
+        _message(ImageElement(url="https://example.com/pic.png", width=640, height=480)),
+        on_image_click=on_image_click,
+    )
+
+    images = [element for element in _walk(root) if isinstance(element, Img)]
+    assert len(images) == 1
+    handlers = images[0]._handlers.get("click", [])
+    assert handlers
+
+    async def run_handlers() -> None:
+        for handler in handlers:
+            await handler(DomEvent(key=images[0].key, type="click", source="user"))
+
+    import asyncio
+
+    asyncio.run(run_handlers())
+    assert len(previews) == 1
+    assert previews[0].src == "https://example.com/pic.png"
+    assert previews[0].width == 640
+    assert previews[0].height == 480
+
+
+def test_market_face_does_not_open_image_preview() -> None:
+    previews: list[ImagePreview] = []
+
+    async def on_image_click(preview: ImagePreview) -> None:
+        previews.append(preview)
+
+    root = build_message_content(
+        _message(MarketFaceElement(name="表情", face_id=b"abc", tab_id=1, width=100, height=100)),
+        on_image_click=on_image_click,
+    )
+
+    images = [element for element in _walk(root) if isinstance(element, Img)]
+    assert len(images) == 1
+    assert not images[0]._handlers.get("click")
+    assert previews == []
 
 
 def test_unknown_element_renders_display_text() -> None:

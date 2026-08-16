@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import mimetypes
+from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from pathlib import Path
 
 from neony.application.theme import stub
 from neony.application.urls import data_url, file_url
-from neony.dom import Anchor, Audio, Border, Color, Div, DOMElement, Img, Span, Styles, Video
+from neony.dom import Anchor, Audio, Border, Color, Div, DOMElement, DomEvent, Img, Span, Styles, Video
 
 from flaza.core.models import (
     AtAllElement,
@@ -27,6 +28,11 @@ from flaza.core.models import (
     UnknownElement,
     VideoElement,
 )
+from flaza.ui.components.image_viewer import ImagePreview
+
+ImageClickHandler = Callable[[ImagePreview], Awaitable[None]]
+
+_INLINE_ELEMENT_TYPES = (TextElement, AtElement, AtAllElement)
 
 _CONTENT = Styles(
     display="flex",
@@ -38,6 +44,7 @@ _CONTENT = Styles(
 )
 
 _TEXT = Styles(white_space="pre-wrap", word_break="break-word")
+_INLINE_GROUP = Styles(max_width="100%", white_space="pre-wrap", word_break="break-word")
 _AT_COLOR_OTHER = Color(hex="#2f7fd1")
 _AT_COLOR_ME = Color(hex="#b9dcff")
 
@@ -104,16 +111,36 @@ _LINK = Styles(
 )
 
 
-def build_message_content(message: Message) -> DOMElement:
+def build_message_content(
+    message: Message,
+    on_image_click: ImageClickHandler | None = None,
+) -> DOMElement:
     """把消息元素渲染为 MessageBubble 的 content。
 
     Neony 只允许 element children，因此所有文本都先包进 Span。
     """
-    children = [_build_element(element, message.from_self) for element in message.elements]
+    children: list[DOMElement] = []
+    elements = message.elements
+    index = 0
+    while index < len(elements):
+        element = elements[index]
+        if isinstance(element, _INLINE_ELEMENT_TYPES):
+            inline: list[DOMElement] = []
+            while index < len(elements) and isinstance(elements[index], _INLINE_ELEMENT_TYPES):
+                inline.append(_build_element(elements[index], message.from_self, on_image_click))
+                index += 1
+            children.append(Span(styles=_INLINE_GROUP, container=inline))
+        else:
+            children.append(_build_element(element, message.from_self, on_image_click))
+            index += 1
     return Div(styles=_CONTENT, container=children)
 
 
-def _build_element(element: MessageElement, from_self: bool) -> DOMElement:
+def _build_element(
+    element: MessageElement,
+    from_self: bool,
+    on_image_click: ImageClickHandler | None,
+) -> DOMElement:
     if isinstance(element, TextElement):
         return Span(container=[element.text], styles=_TEXT)
 
@@ -126,7 +153,14 @@ def _build_element(element: MessageElement, from_self: bool) -> DOMElement:
         src = _image_url(element.url, element.cached_path)
         if src:
             loading = "eager" if src.startswith("data:") else "lazy"
-            return Img(src=src, alt=element.preview_text, loading=loading, styles=_sized_image_styles(element))
+            image = Img(src=src, alt=element.preview_text, loading=loading, styles=_sized_image_styles(element))
+            if on_image_click is not None:
+                _attach_image_click(
+                    image,
+                    ImagePreview(src=src, alt=element.preview_text, width=element.width, height=element.height),
+                    on_image_click,
+                )
+            return image
         return _card("图片", _format_size(element.size))
 
     if isinstance(element, MarketFaceElement):
@@ -190,6 +224,13 @@ def _build_element(element: MessageElement, from_self: bool) -> DOMElement:
         return _card(element.display, element.original_kind)
 
     return _card("[未知消息]", type(element).__name__)
+
+
+def _attach_image_click(image: Img, preview: ImagePreview, callback: ImageClickHandler) -> None:
+    async def open_preview(_event: DomEvent) -> None:
+        await callback(preview)
+
+    image.on_click(open_preview)
 
 
 def _local_or_remote_url(remote_url: str, cached_path: str) -> str:
