@@ -44,6 +44,28 @@ def test_event_bus_dispatches_in_subscription_order() -> None:
     asyncio.run(scenario())
 
 
+def test_event_bus_subscription_can_be_disposed() -> None:
+    async def scenario() -> None:
+        bus = EventBus()
+        seen: list[str] = []
+        done = asyncio.Event()
+
+        async def handler(event: MessageReceived) -> None:
+            seen.append("called")
+            done.set()
+
+        subscription = bus.subscribe(MessageReceived, handler)
+        subscription.dispose()
+        task = asyncio.create_task(bus.run())
+        bus.publish(MessageReceived(message=_sample_message()))
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert seen == []
+
+    asyncio.run(scenario())
+
+
 def test_event_bus_continues_after_handler_error() -> None:
     async def scenario() -> None:
         bus = EventBus()

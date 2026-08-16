@@ -14,6 +14,13 @@ def test_load_config_creates_default_file(tmp_path: Path) -> None:
     assert path.exists()
 
 
+def test_login_configured_requires_uin_and_signer_url() -> None:
+    assert AppConfig().login_configured is False
+    assert AppConfig(login={"uin": 123, "signer_url": "https://sign.example.com"}).login_configured is True
+    assert AppConfig(login={"uin": 0, "signer_url": "https://sign.example.com"}).login_configured is False
+    assert AppConfig(login={"uin": 123, "signer_url": "https://"}).login_configured is False
+
+
 def test_save_and_load_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "appconfig.json"
     config = AppConfig(login={"uin": 123456}, window={"width": 1280, "height": 800})

@@ -6,6 +6,7 @@
 import json
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict
 
@@ -53,6 +54,14 @@ class AppConfig(BaseModel):
     paths: PathsConfig = PathsConfig()
     window: WindowSettings = WindowSettings()
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+
+    @property
+    def login_configured(self) -> bool:
+        """是否具备启动登录所需的最小配置。"""
+        if self.login.uin <= 0:
+            return False
+        url = urlsplit(self.login.signer_url)
+        return url.scheme in ("http", "https") and bool(url.hostname)
 
 
 def load_config(path: str | Path = "appconfig.json") -> AppConfig:

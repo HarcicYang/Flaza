@@ -61,3 +61,6 @@ class QQClient(Protocol):
 
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         """发送一条消息并返回领域消息模型。"""
+
+    async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
+        """补拉指定会话在 after_seq 之后的消息。"""

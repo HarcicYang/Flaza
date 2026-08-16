@@ -18,9 +18,16 @@ from flaza.core.models import (
 
 
 def friend_message_to_domain(event: FriendMessage, self_uin: int) -> Message:
-    """把好友消息事件转换为领域消息。"""
+    """把好友消息事件转换为领域消息。
+
+    离线补拉返回的历史里包含自己发送的消息；此时 peer 在 to_* 字段，
+    否则会把自己发出去的消息归到错误会话。
+    """
+    from_self = event.from_uin == self_uin
+    peer_uin = event.to_uin if from_self else event.from_uin
+    peer_uid = event.to_uid if from_self else event.from_uid
     return Message(
-        chat=FriendChat(uid=event.from_uid, uin=event.from_uin),
+        chat=FriendChat(uid=peer_uid, uin=peer_uin),
         sender_uin=event.from_uin,
         sender_uid=event.from_uid,
         sender_name=str(event.from_uin),
@@ -29,7 +36,7 @@ def friend_message_to_domain(event: FriendMessage, self_uin: int) -> Message:
         rand=event.msg_id,
         timestamp=event.timestamp,
         elements=_convert_elements(event.msg_chain),
-        from_self=event.from_uin == self_uin,
+        from_self=from_self,
     )
 
 

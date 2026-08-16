@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -67,6 +68,12 @@ class MessageSent(FlazaEvent):
     message: Message
 
 
+class MessagesSynced(FlazaEvent):
+    """启动时完成一次离线消息补拉。"""
+
+    total: int = 0
+
+
 class ContactsUpdated(FlazaEvent):
     """联系人数据完成一次同步。"""
 
@@ -76,6 +83,23 @@ class ContactsUpdated(FlazaEvent):
 
 _E = TypeVar("_E", bound=FlazaEvent)
 EventHandler = Callable[[_E], Awaitable[None]]
+
+
+class Subscription:
+    """事件订阅句柄，dispose 后不再接收事件。"""
+
+    def __init__(self, bus: EventBus, event_type: type[FlazaEvent], handler: EventHandler[FlazaEvent]) -> None:
+        self._bus = bus
+        self._event_type = event_type
+        self._handler = handler
+        self._disposed = False
+
+    def dispose(self) -> None:
+        """退订事件，重复调用无副作用。"""
+        if self._disposed:
+            return
+        self._bus._remove(self._event_type, self._handler)
+        self._disposed = True
 
 
 class EventBus:
@@ -89,9 +113,10 @@ class EventBus:
         """把事件放入队列，立即返回。"""
         self._queue.put_nowait(event)
 
-    def subscribe(self, event_type: type[_E], handler: EventHandler[_E]) -> None:
+    def subscribe(self, event_type: type[_E], handler: EventHandler[_E]) -> Subscription:
         """注册某类事件的异步处理器，同一处理器类型可注册多个。"""
         self._handlers[event_type].append(handler)  # type: ignore[arg-type]
+        return Subscription(self, event_type, handler)  # type: ignore[arg-type]
 
     async def run(self) -> None:
         """消费队列并按注册顺序依次 await 处理器。
@@ -107,3 +132,11 @@ class EventBus:
                     raise
                 except Exception:
                     logger.exception("事件处理器执行失败: %r", event)
+
+    def _remove(self, event_type: type[FlazaEvent], handler: EventHandler[FlazaEvent]) -> None:
+        """移除一个已注册的处理器。"""
+        handlers = self._handlers.get(event_type)
+        if handlers is None:
+            return
+        with contextlib.suppress(ValueError):
+            handlers.remove(handler)

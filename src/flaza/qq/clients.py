@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import time
 from collections.abc import Sequence
 from typing import Any, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from lagrange import Client
+from lagrange.client.message.decoder import parse_friend_msg, parse_grp_msg
 from lagrange.client.message.elems import Text
 from lagrange.client.wtlogin.enum import QrCodeResult
 from lagrange.info import InfoManager
 from lagrange.info.app import AppInfo, app_list
+from lagrange.pb.message.msg_push import MsgPushBody
+from lagrange.pb.service.friend import GetFriendMsgRequest
+from lagrange.pb.service.group import PBGetGrpLastSeq, PBGetGrpMsgRequest
+from lagrange.utils.binary.protobuf import proto_decode
 from lagrange.utils.sign import sign_provider
 
 from flaza.config import LoginConfig, PathsConfig
@@ -32,6 +39,9 @@ from flaza.core.models import (
     TextElement,
 )
 from flaza.qq.adapter import LagrangeEventAdapter
+from flaza.qq.convert import friend_message_to_domain, group_message_to_domain
+
+logger = logging.getLogger(__name__)
 
 _QR_STATE_MAP = {
     QrCodeResult.waiting_for_scan: QrCodeState.WAITING_FOR_SCAN,
@@ -135,10 +145,16 @@ class LagrangeQQClient:
     async def get_self_info(self) -> SelfInfo:
         client = self._require_client()
         sig = self._require_info().sig_info
+        nickname = sig.nickname
+        if not nickname and client.uid:
+            try:
+                nickname = (await client.get_user_info(client.uid)).name
+            except Exception:
+                logger.debug("获取当前账号昵称失败，回退为 uin")
         return SelfInfo(
             uin=client.uin,
             uid=client.uid,
-            nickname=sig.nickname or str(client.uin),
+            nickname=nickname or str(client.uin),
         )
 
     async def fetch_friends(self) -> list[Friend]:
@@ -187,6 +203,39 @@ class LagrangeQQClient:
             from_self=True,
         )
 
+    async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
+        """补拉指定会话在 after_seq 之后的消息，单会话最多拉取 limit 条。
+
+        lagrange 自带的 get_friend_msg / get_grp_msg 对空历史和部分空响应
+        使用 assert，因此这里直接发送相同协议包并宽容解析响应。
+        """
+        client = self._require_client()
+        if isinstance(chat, FriendChat):
+            latest = await client.get_friend_latest_seq(chat.uid)
+            start = _sync_start(after_seq, latest, limit)
+            if start is None:
+                return []
+            messages: list[Message] = []
+            while start <= latest:
+                end = min(start + 49, latest)
+                raw_messages = await _fetch_friend_messages(client, chat.uid, start, end)
+                messages.extend(friend_message_to_domain(raw, client.uin) for raw in raw_messages)
+                start = end + 1
+            return messages
+        if isinstance(chat, GroupChat):
+            latest = await _get_group_last_seq(client, chat.group_id)
+            start = _sync_start(after_seq, latest, limit)
+            if start is None:
+                return []
+            messages = []
+            while start <= latest:
+                end = min(start + 49, latest)
+                raw_messages = await _fetch_group_messages(client, chat.group_id, start, end)
+                messages.extend(group_message_to_domain(raw, client.uin) for raw in raw_messages)
+                start = end + 1
+            return messages
+        raise TypeError(f"未知会话目标: {chat!r}")
+
     # ---- 内部方法 ----
 
     def _load_app_info(self) -> AppInfo:
@@ -210,6 +259,96 @@ class LagrangeQQClient:
         if isinstance(element, TextElement):
             return Text(text=element.text)
         raise TypeError(f"暂不支持的发送元素: {type(element).__name__}")
+
+
+_FRIEND_MSG_EMPTY_RETCODE = 100000301
+
+
+async def _fetch_friend_messages(client: Client, uid: str, start: int, end: int) -> list[Any]:
+    packet = await client.send_uni_packet(
+        "trpc.msg.register_proxy.RegisterProxy.SsoGetC2cMsg",
+        GetFriendMsgRequest(uid=uid, start=start, end=end).encode(),
+    )
+    raw = proto_decode(packet.data, max_layer=0).proto
+    ret_code = raw.get(1)
+    if isinstance(ret_code, int) and ret_code != 0:
+        if ret_code == _FRIEND_MSG_EMPTY_RETCODE:
+            return []
+        raise RuntimeError(f"获取好友消息失败: ret_code={ret_code}")
+
+    raw_messages = raw.get(7)
+    if raw_messages is None:
+        return []
+    if isinstance(raw_messages, (bytes, bytearray)):
+        raw_messages = [raw_messages]
+    elif not isinstance(raw_messages, list):
+        return []
+
+    tasks = []
+    for raw_message in raw_messages:
+        try:
+            parsed = MsgPushBody.decode(cast(bytes, raw_message))
+        except Exception:
+            continue
+        tasks.append(parse_friend_msg(client, parsed))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return [result for result in results if not isinstance(result, BaseException)]
+
+
+async def _fetch_group_messages(client: Client, group_id: int, start: int, end: int) -> list[Any]:
+    packet = await client.send_uni_packet(
+        "trpc.msg.register_proxy.RegisterProxy.SsoGetGroupMsg",
+        PBGetGrpMsgRequest.build(group_id, start, end).encode(),
+    )
+    raw = proto_decode(packet.data, max_layer=0).proto
+    body_raw = raw.get(3)
+    if not isinstance(body_raw, (bytes, bytearray)):
+        return []
+    body = proto_decode(bytes(body_raw), max_layer=0).proto
+
+    raw_messages = body.get(6)
+    if raw_messages is None:
+        return []
+    if isinstance(raw_messages, (bytes, bytearray)):
+        raw_messages = [raw_messages]
+    elif not isinstance(raw_messages, list):
+        return []
+
+    tasks = []
+    for raw_message in raw_messages:
+        try:
+            parsed = MsgPushBody.decode(cast(bytes, raw_message))
+        except Exception:
+            continue
+        tasks.append(parse_grp_msg(client, parsed))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return [result for result in results if not isinstance(result, BaseException)]
+
+
+async def _get_group_last_seq(client: Client, group_id: int) -> int:
+    response = await client.send_oidb_svc(
+        0x88D,
+        0,
+        PBGetGrpLastSeq.build(client.app_info.sub_app_id, group_id).encode(),
+    )
+    raw = proto_decode(response.data).proto
+    body = raw.get(1)
+    if not isinstance(body, dict):
+        return 0
+    args = body.get(3)
+    if not isinstance(args, dict):
+        return 0
+    seq = args.get(22)
+    return int(seq) if isinstance(seq, int) and seq > 0 else 0
+
+
+def _sync_start(after_seq: int, latest_seq: int, limit: int) -> int | None:
+    """计算补拉起点；没有缺口时返回 None。"""
+    if limit <= 0 or latest_seq <= after_seq:
+        return None
+    if latest_seq - after_seq > limit:
+        return latest_seq - limit + 1
+    return after_seq + 1
 
 
 def _build_signer_url(base_url: str, token: str) -> str | None:

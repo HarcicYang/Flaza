@@ -10,7 +10,7 @@ from flaza.core.models.account import (
 )
 from flaza.core.models.chat import ChatTarget, FriendChat, GroupChat
 from flaza.core.models.contact import Friend, Group
-from flaza.core.models.message import Message, MessageElement, TextElement
+from flaza.core.models.message import Message, MessageElement, StoredMessage, TextElement
 from flaza.core.models.session import Session
 
 __all__ = [
@@ -28,5 +28,6 @@ __all__ = [
     "SelfInfo",
     "Session",
     "SilentLoginResult",
+    "StoredMessage",
     "TextElement",
 ]

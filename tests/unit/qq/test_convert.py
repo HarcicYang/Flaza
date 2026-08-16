@@ -30,6 +30,25 @@ def test_friend_message_conversion() -> None:
     assert message.text == "你好"
 
 
+def test_self_sent_friend_message_uses_peer_target() -> None:
+    event = FriendMessage(
+        from_uin=10002,
+        from_uid="u_self",
+        to_uin=10001,
+        to_uid="u_1",
+        seq=8,
+        client_seq=9,
+        msg_id=10,
+        timestamp=1700000000,
+        msg="你好",
+        msg_chain=[Text(text="你好")],
+    )
+
+    message = friend_message_to_domain(event, self_uin=10002)
+    assert message.chat.key == "friend:u_1"
+    assert message.from_self is True
+
+
 def test_group_message_conversion() -> None:
     event = GroupMessage(
         grp_id=20002,

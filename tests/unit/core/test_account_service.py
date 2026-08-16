@@ -55,6 +55,9 @@ class FakeQQ:
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         raise NotImplementedError
 
+    async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
+        raise NotImplementedError
+
 
 def _run_account_scenario(silent_result: SilentLoginResult) -> tuple[list[LoginPhase], SelfInfo | None]:
     async def scenario() -> tuple[list[LoginPhase], SelfInfo | None]:

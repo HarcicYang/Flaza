@@ -43,3 +43,12 @@ class Message(BaseModel):
     def text(self) -> str:
         """消息预览文本，由元素派生。"""
         return "".join(element.text for element in self.elements)
+
+
+class StoredMessage(BaseModel):
+    """带本地自增 id 的消息，供分页和已读游标使用。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: int
+    message: Message

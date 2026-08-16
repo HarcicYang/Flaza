@@ -10,3 +10,5 @@
 uv sync --group dev
 uv run flaza
 ```
+
+首次启动时会在界面内引导填写登录配置，保存后应用自动重启。
