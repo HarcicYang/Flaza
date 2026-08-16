@@ -98,7 +98,8 @@ class LoginPage:
         if self._settings_dialog_el is not None:
             with contextlib.suppress(ValueError):
                 self.root.container.remove(self._settings_dialog_el)
-        settings = SettingsDialog(self._actions, self._config.login)
+        config = self._actions.current_config()
+        settings = SettingsDialog(self._actions, config.login, config.window)
         self._settings_dialog_el = settings.dialog.build()
         self.root.container.append(self._settings_dialog_el)
         await self._render()

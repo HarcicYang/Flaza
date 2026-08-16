@@ -70,6 +70,12 @@ class MessageSent(FlazaEvent):
     message: Message
 
 
+class MessageMediaCached(FlazaEvent):
+    """消息中的媒体已下载到本地缓存。"""
+
+    message: Message
+
+
 class MessageRecalled(FlazaEvent):
     """消息被撤回。"""
 

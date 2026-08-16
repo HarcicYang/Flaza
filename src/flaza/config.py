@@ -31,6 +31,7 @@ class PathsConfig(BaseModel):
 
     device_info_path: str = "./device.json"
     sign_info_path: str = "./sig.bin"
+    media_cache_dir: str = "./media_cache"
 
 
 class WindowSettings(BaseModel):

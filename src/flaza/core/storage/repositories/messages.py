@@ -80,6 +80,36 @@ class MessageRepository:
         rows = await cursor.fetchall()
         return [StoredMessage(id=int(row["id"]), message=decode_message(row["payload"])) for row in rows]
 
+    async def update_payload(self, message: Message) -> Message | None:
+        """只替换同会话同 seq 消息的元素，保留当前 recalled 等字段。
+
+        媒体缓存写回时不能覆盖并发发生的撤回状态，因此先读出当前
+        payload，再用新 elements 重建后写回；返回实际持久化的模型。
+        """
+        chat_kind, chat_id = _chat_columns(message.chat)
+        cursor = await self._db.execute(
+            "SELECT payload FROM messages WHERE chat_kind = ? AND chat_id = ? AND seq = ?",
+            (chat_kind, chat_id, message.seq),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+
+        current = decode_message(row["payload"])
+        merged = current.model_copy(update={"elements": message.elements})
+        cursor = await self._db.execute(
+            "UPDATE messages SET text = ?, payload = ? WHERE chat_kind = ? AND chat_id = ? AND seq = ?",
+            (
+                merged.text,
+                encode_message(merged),
+                chat_kind,
+                chat_id,
+                message.seq,
+            ),
+        )
+        await self._db.commit()
+        return merged if cursor.rowcount > 0 else None
+
     async def mark_recalled(self, chat: ChatTarget, seq: int) -> bool:
         """把指定消息标记为已撤回，返回是否更新成功。"""
         chat_kind, chat_id = _chat_columns(chat)

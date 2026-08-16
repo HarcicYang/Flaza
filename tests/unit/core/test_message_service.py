@@ -3,8 +3,9 @@
 import asyncio
 from collections.abc import Sequence
 from pathlib import Path
+from typing import override
 
-from flaza.core.events import EventBus
+from flaza.core.events import EventBus, MessageMediaCached
 from flaza.core.models import (
     ChatTarget,
     Friend,
@@ -12,6 +13,7 @@ from flaza.core.models import (
     Group,
     GroupChat,
     GroupMember,
+    ImageElement,
     Message,
     MessageElement,
     QrCodeData,
@@ -20,6 +22,7 @@ from flaza.core.models import (
     SilentLoginResult,
 )
 from flaza.core.services import MessageService
+from flaza.core.services.media_cache import MediaCache
 from flaza.core.storage import Storage
 
 
@@ -78,6 +81,73 @@ class FakeQQ:
     async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
         self.calls.append((chat, after_seq, limit))
         return self.missing_by_chat.get(chat.key, [])
+
+
+class FakeMediaCache(MediaCache):
+    """返回固定 cached_path 的媒体缓存假实现。"""
+
+    def __init__(self) -> None:
+        super().__init__("/tmp")
+
+    @override
+    def has_cacheable_media(self, message: Message) -> bool:
+        return any(isinstance(element, ImageElement) for element in message.elements)
+
+    @override
+    async def cache_message(self, message: Message) -> Message:
+        elements = [
+            element.model_copy(update={"cached_path": "/tmp/cached.png"})
+            if isinstance(element, ImageElement)
+            else element
+            for element in message.elements
+        ]
+        return message.model_copy(update={"elements": elements})
+
+
+def test_media_cache_schedule_updates_payload_and_publishes_event(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+        bus = EventBus()
+        cache = FakeMediaCache()
+        service = MessageService(FakeQQ(), storage, bus, cache)
+
+        chat = FriendChat(uid="u_1", uin=10002)
+        message = Message(
+            chat=chat,
+            sender_uin=10002,
+            sender_uid="u_1",
+            seq=1,
+            timestamp=100,
+            elements=[ImageElement(url="https://example.com/pic.png", md5=b"m", size=1)],
+        )
+        await storage.messages.insert(message)
+
+        cached_event = asyncio.Event()
+        cached_messages: list[Message] = []
+
+        async def on_cached(event: MessageMediaCached) -> None:
+            cached_messages.append(event.message)
+            cached_event.set()
+
+        bus.subscribe(MessageMediaCached, on_cached)
+        bus_task = asyncio.create_task(bus.run())
+        try:
+            service.schedule_media_cache([message])
+            await asyncio.wait_for(cached_event.wait(), timeout=5)
+
+            stored = await storage.messages.list_recent(chat)
+            element = stored[0].message.elements[0]
+            assert isinstance(element, ImageElement)
+            assert element.cached_path == "/tmp/cached.png"
+            assert cached_messages[0] == stored[0].message
+        finally:
+            bus_task.cancel()
+            await asyncio.gather(bus_task, return_exceptions=True)
+            await service.stop()
+            await storage.close()
+
+    asyncio.run(scenario())
 
 
 def test_send_message_marks_session_read(tmp_path: Path) -> None:

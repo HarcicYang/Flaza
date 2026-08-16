@@ -18,6 +18,7 @@ from flaza.core.events import (
     GroupMembersUpdated,
     GroupNameChanged,
     LoginPhaseChanged,
+    MessageMediaCached,
     MessageRecalled,
     MessageReceived,
     MessageSent,
@@ -89,6 +90,7 @@ class UiStateStore:
         bus.subscribe(ContactsUpdated, self._on_contacts_updated)
         bus.subscribe(MessageReceived, self._on_message_received)
         bus.subscribe(MessageSent, self._on_message_sent)
+        bus.subscribe(MessageMediaCached, self._on_message_media_cached)
         bus.subscribe(MessagesSynced, self._on_messages_synced)
         bus.subscribe(MessageRecalled, self._on_message_recalled)
         bus.subscribe(GroupNameChanged, self._on_group_name_changed)
@@ -144,6 +146,13 @@ class UiStateStore:
 
     async def _on_message_sent(self, event: MessageSent) -> None:
         await self._refresh_for_message(event.message)
+
+    async def _on_message_media_cached(self, event: MessageMediaCached) -> None:
+        """媒体缓存完成后刷新当前会话，让气泡切换到本地文件。"""
+        active_chat = self.active_chat()
+        if active_chat is not None and active_chat.key == event.message.chat.key:
+            messages = await self._storage.messages.list_recent(active_chat)
+            self.messages.set(tuple(messages))
 
     async def _on_messages_synced(self, _event: MessagesSynced) -> None:
         active_chat = self.active_chat()

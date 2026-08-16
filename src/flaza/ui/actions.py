@@ -6,9 +6,9 @@ import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from flaza.config import LoginConfig, save_config
+from flaza.config import AppConfig, LoginConfig, save_config
 from flaza.core.models import ChatTarget, FriendChat, GroupChat, GroupMember, LoginPhase, StoredMessage
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,9 @@ class UiActions:
         if isinstance(chat, GroupChat):
             await self._ensure_visible_group_roles(chat, stored)
         state.messages.set(tuple(stored))
+        message_service = self._message_service()
+        if message_service is not None:
+            message_service.schedule_media_cache([stored.message for stored in stored])
         await self.mark_chat_read(chat)
         await state.refresh_sessions()
         await self.refresh_chat_view()
@@ -127,6 +130,19 @@ class UiActions:
         await self._runtime.eval_js(script)
 
     # ---- 配置 ----
+
+    def current_config(self) -> AppConfig:
+        """返回运行时最新的配置，避免页面持有启动时的旧快照。"""
+        return self._runtime.config
+
+    async def save_theme(self, theme: Literal["dark", "light", "deep_blue"]) -> None:
+        """保存主题配置并立即应用，无需重启。"""
+        window = self._runtime.config.window.model_copy(update={"theme": theme})
+        config = self._runtime.config.model_copy(update={"window": window})
+        save_config(config)
+        self._runtime.config = config
+        await self._runtime.set_theme(theme)
+        await self._runtime.render()
 
     def save_login_config(self, login: LoginConfig) -> None:
         """保存登录配置并重启应用，让新配置在下一次启动时生效。"""

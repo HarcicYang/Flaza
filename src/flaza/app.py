@@ -7,20 +7,14 @@ from __future__ import annotations
 
 import logging
 
-from neony.application import DARK, DEEP_BLUE, LIGHT, NeonApplication, Page, Theme
+from neony.application import NeonApplication, Page
 from neony.application.config import Config as NeonyConfig
 from neony.application.config import WebViewConfig
 from neony.application.config import WindowConfig as NeonyWindowConfig
 
 from flaza.config import AppConfig, load_config
-from flaza.runtime import ApplicationRuntime
+from flaza.runtime import THEME_MAP, ApplicationRuntime
 from flaza.ui.state import UiStateStore
-
-_THEME_MAP: dict[str, Theme] = {
-    "dark": DARK,
-    "light": LIGHT,
-    "deep_blue": DEEP_BLUE,
-}
 
 
 def create_page(runtime: ApplicationRuntime) -> Page:
@@ -44,7 +38,7 @@ def build_application(config: AppConfig) -> tuple[NeonApplication[UiStateStore],
         webview=WebViewConfig(devtools=window.devtools),
     )
     app = NeonApplication[UiStateStore](neony_config, state=runtime.state)
-    app.theme = _THEME_MAP[window.theme]
+    app.theme = THEME_MAP[window.theme]
     app.ready_handler = runtime.on_ready
     app.close_handler = runtime.on_close
 

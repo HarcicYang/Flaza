@@ -5,9 +5,22 @@ import sqlite3
 from pathlib import Path
 
 import aiosqlite
+import msgpack
 
-from flaza.core.models import Friend, FriendChat, Group, GroupChat, GroupMember, GroupMemberRole, Message, TextElement
+from flaza.core.models import (
+    Friend,
+    FriendChat,
+    Group,
+    GroupChat,
+    GroupMember,
+    GroupMemberRole,
+    ImageElement,
+    Message,
+    PokeElement,
+    TextElement,
+)
 from flaza.core.storage import Storage
+from flaza.core.storage.codec import decode_message, encode_message
 from flaza.ui.state import UiStateStore
 
 
@@ -36,6 +49,112 @@ def test_storage_migrates_existing_database(tmp_path: Path) -> None:
         cursor = await storage.require_db().execute("PRAGMA table_info(groups)")
         columns = {row["name"] for row in await cursor.fetchall()}
         assert "owner_uid" in columns
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_codec_decodes_legacy_text_only_payload() -> None:
+    """旧版本只存 TextElement 的 payload 仍可由扩展后的联合模型解析。"""
+    chat = FriendChat(uid="u_1", uin=10001)
+    legacy_message = Message(
+        chat=chat,
+        sender_uin=10001,
+        sender_uid="u_1",
+        seq=1,
+        timestamp=100,
+        elements=[TextElement(text="旧消息")],
+    )
+    blob = msgpack.packb({"version": 1, "message": legacy_message.model_dump(mode="python")}, use_bin_type=True)
+    if blob is None:
+        raise AssertionError("msgpack 编码失败")
+
+    decoded = decode_message(blob)
+    assert decoded == legacy_message
+    assert isinstance(decoded.elements[0], TextElement)
+    assert decoded.text == "旧消息"
+
+
+def test_codec_roundtrips_non_text_elements() -> None:
+    message = Message(
+        chat=FriendChat(uid="u_1", uin=10001),
+        sender_uin=10001,
+        sender_uid="u_1",
+        seq=1,
+        timestamp=100,
+        elements=[
+            TextElement(text="看图："),
+            ImageElement(url="https://example.com/pic.png", width=640, height=480),
+            PokeElement(id=1),
+        ],
+    )
+
+    decoded = decode_message(encode_message(message))
+    assert decoded == message
+    assert decoded.text == "看图：[图片][戳一戳]"
+
+
+def test_storage_persists_non_text_elements(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+
+        chat = FriendChat(uid="u_1", uin=10001)
+        message = Message(
+            chat=chat,
+            sender_uin=10001,
+            sender_uid="u_1",
+            seq=10,
+            timestamp=100,
+            elements=[
+                TextElement(text="看图："),
+                ImageElement(url="https://example.com/pic.png", width=640, height=480),
+                PokeElement(id=1),
+            ],
+        )
+        await storage.messages.insert(message)
+
+        stored = await storage.messages.list_recent(chat)
+        assert len(stored) == 1
+        assert [type(element) for element in stored[0].message.elements] == [TextElement, ImageElement, PokeElement]
+        assert stored[0].message.text == "看图：[图片][戳一戳]"
+
+        sessions = await storage.sessions.list_recent()
+        assert sessions[0].last_text == "看图：[图片][戳一戳]"
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_update_payload_preserves_recalled_state(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+
+        chat = FriendChat(uid="u_1", uin=10001)
+        original = Message(
+            chat=chat,
+            sender_uin=10001,
+            sender_uid="u_1",
+            seq=10,
+            timestamp=100,
+            elements=[ImageElement(url="https://example.com/pic.png", md5=b"m", size=1)],
+        )
+        await storage.messages.insert(original)
+        assert await storage.messages.mark_recalled(chat, 10) is True
+
+        cached = original.model_copy(
+            update={"elements": [original.elements[0].model_copy(update={"cached_path": "/tmp/pic.png"})]}
+        )
+        persisted = await storage.messages.update_payload(cached)
+        assert persisted is not None
+        assert persisted.recalled is True
+        element = persisted.elements[0]
+        assert isinstance(element, ImageElement)
+        assert element.cached_path == "/tmp/pic.png"
+
+        stored = await storage.messages.list_recent(chat)
+        assert stored[0].message.recalled is True
         await storage.close()
 
     asyncio.run(scenario())

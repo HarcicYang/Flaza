@@ -11,6 +11,7 @@ def test_load_config_creates_default_file(tmp_path: Path) -> None:
 
     assert isinstance(config, AppConfig)
     assert config.login.uin == 0
+    assert config.paths.media_cache_dir == "./media_cache"
     assert path.exists()
 
 

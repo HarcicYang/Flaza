@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
-from neony.application.elements import Input, Select, Text, VStack
+from neony.application.elements import Input, Radio, RadioGroup, Text, VStack
 
 from flaza.config import LoginConfig
 
@@ -14,10 +14,13 @@ class LoginConfigForm:
 
     def __init__(self, initial: LoginConfig) -> None:
         self._uin_input = Input(value=str(initial.uin or ""))
-        self._protocol_select = Select(
-            "协议",
-            options=[("linux", "linux"), ("macos", "macos"), ("windows", "windows"), ("custom", "custom")],
+        self._protocol_group = RadioGroup(
+            Radio("linux", value="linux"),
+            Radio("macos", value="macos"),
+            Radio("windows", value="windows"),
+            Radio("custom", value="custom"),
             value="custom" if initial.use_custom else initial.protocol,
+            orientation="horizontal",
         )
         self._signer_url_input = Input(value=initial.signer_url, placeholder="https://sign.example.com")
         self._signer_token_input = Input(value=initial.signer_token, type="password")
@@ -27,7 +30,8 @@ class LoginConfigForm:
         self.root = VStack(
             Text("uin"),
             self._uin_input,
-            self._protocol_select,
+            Text("协议"),
+            self._protocol_group,
             Text("签名服务地址"),
             self._signer_url_input,
             Text("签名服务 token"),
@@ -42,7 +46,7 @@ class LoginConfigForm:
     def values(self) -> LoginConfig:
         protocol = cast(
             Literal["linux", "macos", "windows", "custom"],
-            self._protocol_select.value or "linux",
+            self._protocol_group.value or "linux",
         )
         try:
             uin = int(self._uin_input.value or 0)

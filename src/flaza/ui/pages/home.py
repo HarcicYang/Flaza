@@ -156,7 +156,8 @@ class HomePage:
         if self._settings_el is not None:
             with contextlib.suppress(ValueError):
                 self.root.container.remove(self._settings_el)
-        dialog = SettingsDialog(self._actions, self._config.login)
+        config = self._actions.current_config()
+        dialog = SettingsDialog(self._actions, config.login, config.window)
         self._settings_el = dialog.dialog.build()
         self.root.container.append(self._settings_el)
         await self._render()

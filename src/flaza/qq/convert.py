@@ -6,16 +6,37 @@ from typing import Any
 
 from lagrange.client.events.friend import FriendMessage
 from lagrange.client.events.group import GroupMessage
-from lagrange.client.message.elems import Text
+from lagrange.client.message import elems as lagrange_elems
 
 from flaza.core.models import (
+    AtAllElement,
+    AtElement,
+    AudioElement,
+    EmojiElement,
+    FileElement,
+    ForwardElement,
     FriendChat,
     GroupChat,
     GroupMemberRole,
+    ImageElement,
+    MarketFaceElement,
     Message,
     MessageElement,
+    PokeElement,
+    QuoteElement,
     TextElement,
+    UnknownElement,
+    VideoElement,
 )
+
+# 暂不展开的 lagrange 元素仍保留原始类型，并给出更友好的显示名。
+_UNKNOWN_ELEMENT_DISPLAY = {
+    "json": "[卡片消息]",
+    "service": "[服务消息]",
+    "raw": "[原始消息]",
+    "markdown": "[Markdown 消息]",
+    "keyboard": "[按钮消息]",
+}
 
 
 def friend_message_to_domain(event: FriendMessage, self_uin: int) -> Message:
@@ -59,17 +80,97 @@ def group_message_to_domain(event: GroupMessage, self_uin: int) -> Message:
 
 
 def _convert_elements(msg_chain: list[Any]) -> list[MessageElement]:
-    """把 lagrange 元素转换为领域元素。
+    """把 lagrange 元素精确映射为领域元素。
 
-    领域模型目前只有 TextElement；At/AtAll 等具有文本预览的元素暂时按
-    文本保留展示效果，其余元素取其 display 预览。后续扩展元素模型后，
-    这里改为按类型精确映射。
+    GreyTips 是只发不收的元素，本期不提供发送能力，因此不建立领域模型；
+    若未来协议版本意外出现，统一落入 UnknownElement 保留现场。
     """
     elements: list[MessageElement] = []
     for element in msg_chain:
-        if isinstance(element, Text):
-            text = element.text
+        if isinstance(element, lagrange_elems.Text):
+            elements.append(TextElement(text=element.text))
+        elif isinstance(element, lagrange_elems.At):
+            elements.append(AtElement(text=element.text, uin=element.uin, uid=element.uid))
+        elif isinstance(element, lagrange_elems.AtAll):
+            elements.append(AtAllElement(text=element.text))
+        elif isinstance(element, lagrange_elems.Image):
+            elements.append(
+                ImageElement(
+                    url=element.url,
+                    name=element.name,
+                    size=element.size,
+                    md5=element.md5,
+                    width=element.width,
+                    height=element.height,
+                    is_emoji=element.is_emoji,
+                    display_name=element.display_name,
+                )
+            )
+        elif isinstance(element, lagrange_elems.Emoji):
+            # Reaction 是 Emoji 的子类，当前只保存表情 id，已足够展示占位。
+            elements.append(EmojiElement(id=element.id))
+        elif isinstance(element, lagrange_elems.MarketFace):
+            elements.append(
+                MarketFaceElement(
+                    name=element.name,
+                    face_id=element.face_id,
+                    tab_id=element.tab_id,
+                    width=element.width,
+                    height=element.height,
+                )
+            )
+        elif isinstance(element, lagrange_elems.Audio):
+            elements.append(
+                AudioElement(
+                    url=element.url,
+                    time=element.time,
+                    file_key=element.file_key,
+                    name=element.name,
+                    size=element.size,
+                    md5=element.md5,
+                )
+            )
+        elif isinstance(element, lagrange_elems.Video):
+            elements.append(
+                VideoElement(
+                    url=element.url,
+                    name=element.name,
+                    size=element.size,
+                    width=element.width,
+                    height=element.height,
+                    time=element.time,
+                    file_key=element.file_key,
+                    md5=element.md5,
+                )
+            )
+        elif isinstance(element, lagrange_elems.File):
+            elements.append(
+                FileElement(
+                    file_name=element.file_name,
+                    file_size=element.file_size,
+                    file_url=element.file_url,
+                    file_id=element.file_id,
+                    file_uuid=element.file_uuid,
+                    file_hash=element.file_hash,
+                    md5=element.file_md5,
+                )
+            )
+        elif isinstance(element, lagrange_elems.Poke):
+            elements.append(PokeElement(id=element.id))
+        elif isinstance(element, lagrange_elems.Quote):
+            elements.append(
+                QuoteElement(
+                    seq=element.seq,
+                    uin=element.uin,
+                    timestamp=element.timestamp,
+                    uid=element.uid,
+                    msg=element.msg,
+                )
+            )
+        elif isinstance(element, lagrange_elems.MulitMsg):
+            elements.append(ForwardElement(resid=element.resid or "", file_name=element.file_name))
         else:
-            text = getattr(element, "text", "") or getattr(element, "display", "") or "[未知消息]"
-        elements.append(TextElement(text=text))
+            original_kind = str(getattr(element, "type", type(element).__name__))
+            display = _UNKNOWN_ELEMENT_DISPLAY.get(original_kind) or getattr(element, "display", "") or "[未知消息]"
+            elements.append(UnknownElement(original_kind=original_kind, display=display))
     return elements

@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 
-from flaza.core.events import EventBus, MessageRecalled, MessageReceived, MessageSent, MessagesSynced
+from flaza.core.events import (
+    EventBus,
+    MessageMediaCached,
+    MessageRecalled,
+    MessageReceived,
+    MessageSent,
+    MessagesSynced,
+)
 from flaza.core.models import ChatTarget, FriendChat, GroupChat, Message, MessageElement, TextElement
 from flaza.core.ports import QQClient
+from flaza.core.services.media_cache import MediaCache
 from flaza.core.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -16,10 +25,19 @@ logger = logging.getLogger(__name__)
 class MessageService:
     """消息用例的统一入口。"""
 
-    def __init__(self, qq: QQClient, storage: Storage, bus: EventBus) -> None:
+    def __init__(
+        self,
+        qq: QQClient,
+        storage: Storage,
+        bus: EventBus,
+        media_cache: MediaCache | None = None,
+    ) -> None:
         self._qq = qq
         self._storage = storage
         self._bus = bus
+        self._media_cache = media_cache
+        self._media_tasks: set[asyncio.Task[None]] = set()
+        self._scheduled_media: set[tuple[str, int]] = set()
 
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         """通过协议端口发送消息，持久化并标记已读后发布 MessageSent。"""
@@ -36,6 +54,7 @@ class MessageService:
     async def on_message_received(self, event: MessageReceived) -> None:
         """入站消息事件处理器：先持久化，再交给后续 UI 订阅者。"""
         await self._storage.messages.insert(event.message)
+        self.schedule_media_cache([event.message])
 
     async def sync_offline_messages(self, limit_per_chat: int = 500, initial_limit_per_chat: int = 50) -> int:
         """登录后补拉离线消息。
@@ -67,12 +86,61 @@ class MessageService:
                 continue
             for message in messages:
                 await self._storage.messages.insert(message)
+            self.schedule_media_cache(messages)
             total += len(messages)
 
         logger.info("离线消息补拉完成：共 %s 条", total)
         if total:
             self._bus.publish(MessagesSynced(total=total))
         return total
+
+    def schedule_media_cache(self, messages: Sequence[Message]) -> None:
+        """为消息中的媒体安排后台缓存任务，不阻塞消息展示。"""
+        if self._media_cache is None:
+            return
+        for message in messages:
+            if not self._media_cache.has_cacheable_media(message):
+                continue
+            key = (message.chat.key, message.seq)
+            if key in self._scheduled_media:
+                continue
+            self._scheduled_media.add(key)
+            task = asyncio.create_task(self._cache_message_and_publish(message, key))
+            self._media_tasks.add(task)
+            task.add_done_callback(self._media_tasks.discard)
+
+    async def cache_message_media(self, message: Message) -> Message | None:
+        """下载一条消息的媒体并更新持久化 payload；未变化时返回 None。"""
+        if self._media_cache is None:
+            return None
+        cached = await self._media_cache.cache_message(message)
+        if cached == message:
+            return None
+        updated = await self._storage.messages.update_payload(cached)
+        if updated is not None:
+            self._bus.publish(MessageMediaCached(message=updated))
+            return updated
+        return None
+
+    async def stop(self) -> None:
+        """取消尚未完成的媒体缓存任务。"""
+        tasks = list(self._media_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._media_tasks.clear()
+        self._scheduled_media.clear()
+
+    async def _cache_message_and_publish(self, message: Message, key: tuple[str, int]) -> None:
+        try:
+            await self.cache_message_media(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("消息媒体缓存失败: chat=%s seq=%s", message.chat.key, message.seq, exc_info=True)
+        finally:
+            self._scheduled_media.discard(key)
 
     async def mark_read(self, chat: ChatTarget, last_read_id: int) -> None:
         """把会话已读游标推进到指定本地消息 id。"""

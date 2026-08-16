@@ -11,6 +11,7 @@ from neony.dom import Div, DOMElement, Span, Styles
 
 from flaza.core.models import ChatTarget, GroupChat, GroupMemberRole, Message, StoredMessage
 from flaza.ui.avatars import friend_avatar_url
+from flaza.ui.components.message_content import build_message_content
 from flaza.ui.state import ChatNotice, UiStateStore
 
 _BadgeVariant = Literal["accent", "danger", "neutral", "success"]
@@ -259,6 +260,7 @@ class MessageList:
         role = self._resolve_role(chat, message)
         bubble = MessageBubble(
             text=message.text,
+            content=build_message_content(message),
             from_me=message.from_self,
             name=message.sender_name if isinstance(chat, GroupChat) and not message.from_self else None,
             avatar=avatar,

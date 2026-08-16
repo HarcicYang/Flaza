@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from neony.application import NeonApplication
+from neony.application import DARK, DEEP_BLUE, LIGHT, NeonApplication, Theme
 
 from flaza.config import AppConfig
 from flaza.core.events import (
@@ -21,6 +21,7 @@ from flaza.core.events import (
 )
 from flaza.core.models import LoginPhase
 from flaza.core.services import AccountService, ContactService, GroupEventService, MessageService
+from flaza.core.services.media_cache import MediaCache
 from flaza.core.storage import Storage
 from flaza.qq.api import LagrangeQQClient
 from flaza.ui.actions import UiActions
@@ -29,6 +30,12 @@ from flaza.ui.state import UiStateStore
 
 logger = logging.getLogger(__name__)
 
+THEME_MAP: dict[str, Theme] = {
+    "dark": DARK,
+    "light": LIGHT,
+    "deep_blue": DEEP_BLUE,
+}
+
 
 class ApplicationRuntime:
     """持有应用对象图，并负责异步生命周期。"""
@@ -36,6 +43,7 @@ class ApplicationRuntime:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.storage = Storage()
+        self.media_cache = MediaCache(config.paths.media_cache_dir)
         self.bus = EventBus()
         self.state = UiStateStore(self.storage)
         self.actions = UiActions(self)
@@ -84,6 +92,12 @@ class ApplicationRuntime:
             return
         await self._neony_app.eval_js(script)
 
+    async def set_theme(self, theme_name: str) -> None:
+        """立即应用主题；应用尚未创建时静默跳过。"""
+        if self._neony_app is None:
+            return
+        await self._neony_app.set_theme(THEME_MAP[theme_name])
+
     # ---- 生命周期 ----
 
     async def on_ready(self) -> None:
@@ -111,7 +125,7 @@ class ApplicationRuntime:
         account_service = AccountService(qq, self.bus)
         contact_service = ContactService(qq, self.storage, self.bus)
         group_event_service = GroupEventService(self.storage)
-        message_service = MessageService(qq, self.storage, self.bus)
+        message_service = MessageService(qq, self.storage, self.bus, self.media_cache)
 
         self._qq = qq
         self._account_service = account_service
@@ -146,6 +160,8 @@ class ApplicationRuntime:
             subscription.dispose()
         self._service_subscriptions.clear()
 
+        if self._message_service is not None:
+            await self._message_service.stop()
         if self._account_service is not None:
             await self._account_service.stop()
         if self._qq is not None:
