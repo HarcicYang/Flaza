@@ -1,8 +1,10 @@
 # Flaza
 
-A QQ desktop client built with [lagrange-python](https://github.com/LagrangeDev/lagrange-python) and [Neony](https://github.com/HarcicYang/Neony).
+基于 [lagrange-python](https://github.com/LagrangeDev/lagrange-python) 和 [Neony](https://github.com/HarcicYang/Neony) 的 QQ 桌面客户端。
 
-## Development
+> 本项目文档统一使用简体中文。
+
+## 开发
 
 ```bash
 uv sync --group dev

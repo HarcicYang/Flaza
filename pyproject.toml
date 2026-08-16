@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "flaza"
 version = "0.1.0"
-description = "A QQ desktop client built with lagrange-python and Neony"
+description = "基于 lagrange-python 与 Neony 的 QQ 桌面客户端"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [
