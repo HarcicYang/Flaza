@@ -190,7 +190,7 @@ class UiStateStore:
                 )
             messages.append(stored)
         self.messages.set(tuple(messages))
-        self._append_notice(event.chat.key, "撤回了一条消息", event.timestamp, f"recall:{event.chat.key}:{event.seq}")
+        # 撤回灰条由 recalled 消息在原位渲染，不再额外追加 notice，避免同一条撤回显示两次。
         await self.refresh_sessions()
 
     async def _on_group_name_changed(self, event: GroupNameChanged) -> None:
