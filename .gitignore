@@ -43,3 +43,5 @@ Thumbs.db
 appconfig.json
 flaza.db
 media_cache/
+
+.account-backup/
