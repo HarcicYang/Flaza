@@ -1,5 +1,7 @@
 # Flaza
 
+> 状态：**WIP** —— 早期开发中，功能可能随时变化，暂不建议作为唯一客户端长期使用。 ~~（啊后半句是不是废话）~~
+
 基于 [lagrange-python](https://github.com/LagrangeDev/lagrange-python) 和 [Neony](https://github.com/HarcicYang/Neony) 的 QQ 桌面客户端。
 
 > Flaza 是非官方 QQ 客户端，与腾讯公司无关。本项目仅供学习与技术交流，
