@@ -8,9 +8,19 @@ import logging
 from neony.application import NeonApplication
 
 from flaza.config import AppConfig
-from flaza.core.events import EventBus, LoginPhaseChanged, MessageReceived, Subscription
+from flaza.core.events import (
+    EventBus,
+    GroupAdminChanged,
+    GroupMemberJoined,
+    GroupMemberQuit,
+    GroupNameChanged,
+    LoginPhaseChanged,
+    MessageRecalled,
+    MessageReceived,
+    Subscription,
+)
 from flaza.core.models import LoginPhase
-from flaza.core.services import AccountService, ContactService, MessageService
+from flaza.core.services import AccountService, ContactService, GroupEventService, MessageService
 from flaza.core.storage import Storage
 from flaza.qq.api import LagrangeQQClient
 from flaza.ui.actions import UiActions
@@ -34,7 +44,9 @@ class ApplicationRuntime:
         self._qq: LagrangeQQClient | None = None
         self._account_service: AccountService | None = None
         self._contact_service: ContactService | None = None
+        self._group_event_service: GroupEventService | None = None
         self._message_service: MessageService | None = None
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self._service_subscriptions: list[Subscription] = []
         self._state_wired = False
         self._bus_task: asyncio.Task[None] | None = None
@@ -54,6 +66,10 @@ class ApplicationRuntime:
     def message_service(self) -> MessageService | None:
         return self._message_service
 
+    @property
+    def group_event_service(self) -> GroupEventService | None:
+        return self._group_event_service
+
     def attach_neony_app(self, app: NeonApplication[UiStateStore]) -> None:
         self._neony_app = app
         self.state.set_render(self.render)
@@ -61,11 +77,7 @@ class ApplicationRuntime:
     async def render(self) -> None:
         if self._neony_app is None:
             return
-        try:
-            await self._neony_app.render()
-        except RuntimeError:
-            # Neony 尚未运行或窗口正在关闭时忽略渲染请求。
-            return
+        await self._neony_app.render()
 
     async def eval_js(self, script: str) -> None:
         if self._neony_app is None:
@@ -82,6 +94,7 @@ class ApplicationRuntime:
             await self.start_qq()
 
     async def on_close(self) -> None:
+        await self._cancel_background_tasks()
         await self.stop_qq()
         if self._bus_task is not None:
             self._bus_task.cancel()
@@ -97,15 +110,22 @@ class ApplicationRuntime:
         qq = LagrangeQQClient(self.config.login, self.config.paths, self.bus)
         account_service = AccountService(qq, self.bus)
         contact_service = ContactService(qq, self.storage, self.bus)
+        group_event_service = GroupEventService(self.storage)
         message_service = MessageService(qq, self.storage, self.bus)
 
         self._qq = qq
         self._account_service = account_service
         self._contact_service = contact_service
+        self._group_event_service = group_event_service
         self._message_service = message_service
 
         self._service_subscriptions = [
             self.bus.subscribe(MessageReceived, message_service.on_message_received),
+            self.bus.subscribe(MessageRecalled, message_service.on_message_recalled),
+            self.bus.subscribe(GroupNameChanged, group_event_service.on_group_name_changed),
+            self.bus.subscribe(GroupMemberJoined, group_event_service.on_group_member_joined),
+            self.bus.subscribe(GroupMemberQuit, group_event_service.on_group_member_quit),
+            self.bus.subscribe(GroupAdminChanged, group_event_service.on_group_admin_changed),
             self.bus.subscribe(LoginPhaseChanged, self._sync_contacts_on_online),
             self.bus.subscribe(LoginPhaseChanged, self._sync_messages_on_online),
         ]
@@ -133,12 +153,24 @@ class ApplicationRuntime:
 
         self._account_service = None
         self._contact_service = None
+        self._group_event_service = None
         self._message_service = None
         self._qq = None
 
     async def _sync_contacts_on_online(self, event: LoginPhaseChanged) -> None:
-        if event.phase is LoginPhase.ONLINE and self._contact_service is not None:
-            await self._contact_service.sync()
+        if event.phase is not LoginPhase.ONLINE or self._contact_service is None:
+            return
+        await self._contact_service.sync()
+        task = asyncio.create_task(self._contact_service.sync_group_members(), name="flaza-group-members")
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _cancel_background_tasks(self) -> None:
+        for task in list(self._background_tasks):
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
 
     async def _sync_messages_on_online(self, event: LoginPhaseChanged) -> None:
         if event.phase is not LoginPhase.ONLINE or self._message_service is None:

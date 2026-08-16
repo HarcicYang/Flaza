@@ -64,7 +64,15 @@
 - 未读数使用本地 `messages.id` 游标计算。
 - UI 分页使用 `StoredMessage(id, message)`，领域事件仍只传 `Message`。
 
-### 6. MVP UI
+### 6. 群事件与身份标记
+
+- 第一批结构化群事件：撤回、群名变更、成员加入/退出、管理员变更、禁言。
+- 事件先持久化再派生为聊天流灰条，不压成普通消息文本。
+- `Message` 增加 `recalled`、`sender_is_bot`、`sender_role`。
+- 群成员身份缓存到 `group_members` 表，登录后后台同步。
+- 群聊消息名字旁显示身份 Badge：群主 accent、管理员 success、机器人 neutral。
+
+### 7. MVP UI
 
 - 页面流：配置不完整时显示 SetupPage；配置完整时显示 LoginPage；登录成功后切换到 HomePage。
 - 窗口统一使用 Neony TitleBar 自定义标题栏，系统原生标题栏关闭（`decorations=False`）。

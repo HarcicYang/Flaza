@@ -2,12 +2,16 @@
 
 import asyncio
 from collections.abc import Sequence
+from typing import override
+
+import pytest
 
 from flaza.core.events import EventBus, LoginPhaseChanged, SelfInfoChanged
 from flaza.core.models import (
     ChatTarget,
     Friend,
     Group,
+    GroupMember,
     LoginPhase,
     Message,
     MessageElement,
@@ -17,6 +21,7 @@ from flaza.core.models import (
     SilentLoginResult,
 )
 from flaza.core.services import AccountService
+from flaza.core.services import account as account_module
 
 
 class FakeQQ:
@@ -50,6 +55,12 @@ class FakeQQ:
         raise NotImplementedError
 
     async def fetch_groups(self) -> list[Group]:
+        raise NotImplementedError
+
+    async def fetch_group_members(self, group_id: int) -> list[GroupMember]:
+        raise NotImplementedError
+
+    async def fetch_group_member(self, group_id: int, uid: str) -> GroupMember | None:
         raise NotImplementedError
 
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
@@ -103,3 +114,35 @@ def test_silent_login_without_session() -> None:
     phases, info = _run_account_scenario(SilentLoginResult.NO_SESSION)
     assert phases == [LoginPhase.SILENT_LOGGING_IN, LoginPhase.IDLE]
     assert info is None
+
+
+class SlowQQ(FakeQQ):
+    @override
+    async def try_silent_login(self) -> SilentLoginResult:
+        await asyncio.sleep(1)
+        return SilentLoginResult.OK
+
+
+def test_silent_login_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(account_module, "_SILENT_LOGIN_TIMEOUT_SECONDS", 0.05)
+
+    async def scenario() -> None:
+        bus = EventBus()
+        service = AccountService(SlowQQ(SilentLoginResult.OK), bus)
+        phases: list[LoginPhase] = []
+        done = asyncio.Event()
+
+        async def on_phase(event: LoginPhaseChanged) -> None:
+            phases.append(event.phase)
+            if event.phase is LoginPhase.FAILED:
+                done.set()
+
+        bus.subscribe(LoginPhaseChanged, on_phase)
+        task = asyncio.create_task(bus.run())
+        await service.start()
+        await asyncio.wait_for(done.wait(), timeout=1)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert phases == [LoginPhase.SILENT_LOGGING_IN, LoginPhase.FAILED]
+
+    asyncio.run(scenario())

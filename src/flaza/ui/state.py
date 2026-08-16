@@ -11,7 +11,14 @@ from flaza.core.events import (
     ConnectionStateChanged,
     ContactsUpdated,
     EventBus,
+    GroupAdminChanged,
+    GroupMemberJoined,
+    GroupMemberMuted,
+    GroupMemberQuit,
+    GroupMembersUpdated,
+    GroupNameChanged,
     LoginPhaseChanged,
+    MessageRecalled,
     MessageReceived,
     MessageSent,
     MessagesSynced,
@@ -23,6 +30,7 @@ from flaza.core.models import (
     ConnectionState,
     Friend,
     Group,
+    GroupMemberRole,
     LoginPhase,
     Message,
     SelfInfo,
@@ -34,6 +42,16 @@ from flaza.core.storage import Storage
 logger = logging.getLogger(__name__)
 
 RenderCallback = Callable[[], Awaitable[None]]
+
+
+class ChatNotice:
+    """聊天流中的派生灰条。"""
+
+    def __init__(self, chat_key: str, text: str, timestamp: int, key: str) -> None:
+        self.chat_key = chat_key
+        self.text = text
+        self.timestamp = timestamp
+        self.key = key
 
 
 class UiStateStore:
@@ -55,6 +73,8 @@ class UiStateStore:
         self.active_chat = Signal[ChatTarget | None](None)
         self.active_chat_title = Signal("")
         self.messages = Signal[tuple[StoredMessage, ...]](())
+        self.notices = Signal[tuple[ChatNotice, ...]](())
+        self.group_roles = Signal[dict[str, GroupMemberRole]]({})
 
     def set_render(self, render: RenderCallback | None) -> None:
         """注入 Neony 渲染回调，由应用组装根调用。"""
@@ -70,6 +90,13 @@ class UiStateStore:
         bus.subscribe(MessageReceived, self._on_message_received)
         bus.subscribe(MessageSent, self._on_message_sent)
         bus.subscribe(MessagesSynced, self._on_messages_synced)
+        bus.subscribe(MessageRecalled, self._on_message_recalled)
+        bus.subscribe(GroupNameChanged, self._on_group_name_changed)
+        bus.subscribe(GroupMemberJoined, self._on_group_member_joined)
+        bus.subscribe(GroupMemberQuit, self._on_group_member_quit)
+        bus.subscribe(GroupAdminChanged, self._on_group_admin_changed)
+        bus.subscribe(GroupMemberMuted, self._on_group_member_muted)
+        bus.subscribe(GroupMembersUpdated, self._on_group_members_updated)
 
     async def load_initial_state(self) -> None:
         """启动时从存储恢复联系人与会话摘要。"""
@@ -111,7 +138,6 @@ class UiStateStore:
     async def _on_contacts_updated(self, event: ContactsUpdated) -> None:
         self.friends.set(tuple(event.friends))
         self.groups.set(tuple(event.groups))
-        await self._request_render()
 
     async def _on_message_received(self, event: MessageReceived) -> None:
         await self._refresh_for_message(event.message)
@@ -120,20 +146,106 @@ class UiStateStore:
         await self._refresh_for_message(event.message)
 
     async def _on_messages_synced(self, _event: MessagesSynced) -> None:
-        await self.refresh_sessions()
         active_chat = self.active_chat()
         if active_chat is not None:
+            await self._mark_active_chat_read(active_chat)
             messages = await self._storage.messages.list_recent(active_chat)
             self.messages.set(tuple(messages))
-        await self._request_render()
+        await self.refresh_sessions()
 
     async def _refresh_for_message(self, message: Message) -> None:
-        await self.refresh_sessions()
         active_chat = self.active_chat()
         if active_chat is not None and active_chat.key == message.chat.key:
+            await self._mark_active_chat_read(active_chat)
             messages = await self._storage.messages.list_recent(active_chat)
             self.messages.set(tuple(messages))
-        await self._request_render()
+            logger.info("消息状态已刷新: chat=%s count=%s", active_chat.key, len(messages))
+        else:
+            logger.info(
+                "消息不属于当前会话: active=%s message=%s", active_chat.key if active_chat else None, message.chat.key
+            )
+        await self.refresh_sessions()
+
+    async def _mark_active_chat_read(self, chat: ChatTarget) -> None:
+        latest_id = await self._storage.messages.latest_id(chat)
+        if latest_id is not None:
+            await self._storage.messages.mark_read(chat, latest_id)
+
+    async def _on_message_recalled(self, event: MessageRecalled) -> None:
+        messages = []
+        for stored in self.messages():
+            if stored.message.chat.key == event.chat.key and stored.message.seq == event.seq:
+                stored = StoredMessage(
+                    id=stored.id,
+                    message=stored.message.model_copy(update={"recalled": True}),
+                )
+            messages.append(stored)
+        self.messages.set(tuple(messages))
+        self._append_notice(event.chat.key, "撤回了一条消息", event.timestamp, f"recall:{event.chat.key}:{event.seq}")
+        await self.refresh_sessions()
+
+    async def _on_group_name_changed(self, event: GroupNameChanged) -> None:
+        groups = tuple(
+            group.model_copy(update={"name": event.name_new}) if group.group_id == event.group_id else group
+            for group in self.groups()
+        )
+        self.groups.set(groups)
+        self._append_notice(
+            f"group:{event.group_id}",
+            f"群名已修改为“{event.name_new}”",
+            event.timestamp,
+            f"name:{event.group_id}:{event.timestamp}",
+        )
+        await self.refresh_sessions()
+
+    async def _on_group_member_joined(self, event: GroupMemberJoined) -> None:
+        self._append_notice(
+            f"group:{event.group_id}",
+            "有成员加入群聊",
+            event.timestamp,
+            f"join:{event.group_id}:{event.uid}:{event.timestamp}",
+        )
+
+    async def _on_group_member_quit(self, event: GroupMemberQuit) -> None:
+        text = "有成员退出群聊"
+        if event.is_kicked:
+            text = "有成员被移出群聊"
+        roles = dict(self.group_roles())
+        roles.pop(f"{event.group_id}:{event.uid}", None)
+        self.group_roles.set(roles)
+        self._append_notice(
+            f"group:{event.group_id}", text, event.timestamp, f"quit:{event.group_id}:{event.uid}:{event.timestamp}"
+        )
+
+    async def _on_group_admin_changed(self, event: GroupAdminChanged) -> None:
+        key = f"{event.group_id}:{event.uid}"
+        roles = dict(self.group_roles())
+        roles[key] = GroupMemberRole.ADMIN if event.is_set else GroupMemberRole.MEMBER
+        self.group_roles.set(roles)
+        text = "设置了新的管理员" if event.is_set else "取消了管理员"
+        self._append_notice(f"group:{event.group_id}", text, event.timestamp, f"admin:{key}:{event.timestamp}")
+
+    async def _on_group_member_muted(self, event: GroupMemberMuted) -> None:
+        text = "开启了全员禁言" if not event.target_uid else f"有成员被禁言 {event.duration} 秒"
+        self._append_notice(
+            f"group:{event.group_id}",
+            text,
+            event.timestamp,
+            f"mute:{event.group_id}:{event.target_uid}:{event.timestamp}",
+        )
+
+    async def _on_group_members_updated(self, event: GroupMembersUpdated) -> None:
+        roles = dict(self.group_roles())
+        for member in event.members:
+            roles[f"{member.group_id}:{member.uid}"] = member.role
+        self.group_roles.set(roles)
+
+    def _append_notice(self, chat_key: str, text: str, timestamp: int, key: str) -> None:
+        notices = list(self.notices())
+        if any(notice.key == key for notice in notices):
+            return
+        notices.append(ChatNotice(chat_key=chat_key, text=text, timestamp=timestamp, key=key))
+        self.notices.set(tuple(notices))
 
     async def _request_render(self) -> None:
         if self._render is not None:

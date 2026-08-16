@@ -34,8 +34,8 @@ class MessageRepository:
         await self._db.execute(
             """
             INSERT OR IGNORE INTO messages
-                (chat_kind, chat_id, sender_uin, seq, client_seq, rand, timestamp, from_self, text, payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (chat_kind, chat_id, sender_uin, seq, client_seq, rand, timestamp, from_self, recalled, text, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_kind,
@@ -46,6 +46,7 @@ class MessageRepository:
                 message.rand,
                 message.timestamp,
                 int(message.from_self),
+                int(message.recalled),
                 message.text,
                 encode_message(message),
             ),
@@ -63,15 +64,43 @@ class MessageRepository:
 
     async def list_recent(self, chat: ChatTarget, limit: int = 50) -> list[StoredMessage]:
         """返回最近 limit 条消息，按时间正序（可直接用于聊天流）。"""
-        return await self._list(chat, "ORDER BY id ASC", limit)
+        return await self._list_latest(chat, limit, before_id=None)
 
     async def list_before(self, chat: ChatTarget, before_id: int, limit: int = 50) -> list[StoredMessage]:
         """返回指定本地 id 之前的更早消息，按时间正序。"""
-        return await self._list(chat, "AND id < ? ORDER BY id ASC", limit, before_id)
+        return await self._list_latest(chat, limit, before_id=before_id)
 
     async def list_after(self, chat: ChatTarget, after_id: int, limit: int = 100) -> list[StoredMessage]:
         """返回指定本地 id 之后的消息，按时间正序。"""
-        return await self._list(chat, "AND id > ? ORDER BY id ASC", limit, after_id)
+        chat_kind, chat_id = _chat_columns(chat)
+        cursor = await self._db.execute(
+            "SELECT id, payload FROM messages WHERE chat_kind = ? AND chat_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
+            (chat_kind, chat_id, after_id, max(0, limit)),
+        )
+        rows = await cursor.fetchall()
+        return [StoredMessage(id=int(row["id"]), message=decode_message(row["payload"])) for row in rows]
+
+    async def mark_recalled(self, chat: ChatTarget, seq: int) -> bool:
+        """把指定消息标记为已撤回，返回是否更新成功。"""
+        chat_kind, chat_id = _chat_columns(chat)
+        cursor = await self._db.execute(
+            "SELECT payload FROM messages WHERE chat_kind = ? AND chat_id = ? AND seq = ?",
+            (chat_kind, chat_id, seq),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+
+        message = decode_message(row["payload"])
+        if message.recalled:
+            return True
+        updated = message.model_copy(update={"recalled": True})
+        cursor = await self._db.execute(
+            "UPDATE messages SET recalled = 1, payload = ? WHERE chat_kind = ? AND chat_id = ? AND seq = ?",
+            (encode_message(updated), chat_kind, chat_id, seq),
+        )
+        await self._db.commit()
+        return cursor.rowcount > 0
 
     async def latest_seq(self, chat: ChatTarget) -> int | None:
         """返回会话最后一条消息的协议 seq。"""
@@ -112,18 +141,38 @@ class MessageRepository:
         )
         await self._db.commit()
 
-    async def _list(
-        self, chat: ChatTarget, clause: str, limit: int, parameter: int | None = None
+    async def _list_latest(
+        self,
+        chat: ChatTarget,
+        limit: int,
+        *,
+        before_id: int | None,
     ) -> list[StoredMessage]:
+        """取最近 limit 条（可选 before_id 之前），再按 id 正序返回。"""
         chat_kind, chat_id = _chat_columns(chat)
-        params: tuple[object, ...]
-        if parameter is None:
-            params = (chat_kind, chat_id, max(0, limit))
+        if before_id is None:
+            cursor = await self._db.execute(
+                """
+                SELECT id, payload FROM (
+                    SELECT id, payload FROM messages
+                    WHERE chat_kind = ? AND chat_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                ) ORDER BY id ASC
+                """,
+                (chat_kind, chat_id, max(0, limit)),
+            )
         else:
-            params = (chat_kind, chat_id, parameter, max(0, limit))
-        cursor = await self._db.execute(
-            f"SELECT id, payload FROM messages WHERE chat_kind = ? AND chat_id = ? {clause} LIMIT ?",
-            params,
-        )
+            cursor = await self._db.execute(
+                """
+                SELECT id, payload FROM (
+                    SELECT id, payload FROM messages
+                    WHERE chat_kind = ? AND chat_id = ? AND id < ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                ) ORDER BY id ASC
+                """,
+                (chat_kind, chat_id, before_id, max(0, limit)),
+            )
         rows = await cursor.fetchall()
         return [StoredMessage(id=int(row["id"]), message=decode_message(row["payload"])) for row in rows]

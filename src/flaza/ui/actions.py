@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from flaza.config import LoginConfig, save_config
-from flaza.core.models import ChatTarget, FriendChat, GroupChat, LoginPhase
+from flaza.core.models import ChatTarget, FriendChat, GroupChat, GroupMember, LoginPhase, StoredMessage
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from flaza.runtime import ApplicationRuntime
@@ -18,6 +22,11 @@ class UiActions:
 
     def __init__(self, runtime: ApplicationRuntime) -> None:
         self._runtime = runtime
+        self._chat_view_refresher: Callable[[], Awaitable[None]] | None = None
+
+    def set_chat_view_refresher(self, refresher: Callable[[], Awaitable[None]]) -> None:
+        """由 HomePage 注册，确保状态变化后聊天 DOM 立即刷新。"""
+        self._chat_view_refresher = refresher
 
     # ---- 登录 ----
 
@@ -38,10 +47,35 @@ class UiActions:
         state.active_chat_title.set(self._chat_title(chat))
 
         stored = await self._runtime.storage.messages.list_recent(chat)
+        if isinstance(chat, GroupChat):
+            await self._ensure_visible_group_roles(chat, stored)
         state.messages.set(tuple(stored))
         await self.mark_chat_read(chat)
         await state.refresh_sessions()
-        await self._runtime.render()
+        await self.refresh_chat_view()
+
+    async def _ensure_visible_group_roles(self, chat: GroupChat, messages: list[StoredMessage]) -> None:
+        known = self._runtime.state.group_roles()
+        missing_uids: list[str] = []
+        seen: set[str] = set()
+        for stored in messages:
+            message = stored.message
+            if message.from_self or message.sender_uid in seen:
+                continue
+            seen.add(message.sender_uid)
+            if f"{chat.group_id}:{message.sender_uid}" not in known:
+                missing_uids.append(message.sender_uid)
+
+        if not missing_uids:
+            return
+        members = await self._contact_service().ensure_member_roles(chat.group_id, missing_uids)
+        self._merge_group_roles(members)
+
+    async def refresh_chat_view(self) -> None:
+        if self._chat_view_refresher is not None:
+            await self._chat_view_refresher()
+        else:
+            await self._runtime.render()
 
     async def send_message(self, text: str) -> None:
         state = self._runtime.state
@@ -54,8 +88,9 @@ class UiActions:
         state.messages.set(tuple(stored))
         await self.mark_chat_read(chat)
         await state.refresh_sessions()
-        await self._runtime.render()
-        await self.scroll_chat_to_bottom()
+        logger.info("发送消息后刷新聊天视图: chat=%s count=%s", chat.key, len(stored))
+        await self.refresh_chat_view()
+        await self.scroll_chat_to_bottom(force=True)
 
     async def mark_chat_read(self, chat: ChatTarget) -> None:
         latest_id = await self._runtime.storage.messages.latest_id(chat)
@@ -70,14 +105,25 @@ class UiActions:
     async def sync_contacts(self) -> None:
         await self._contact_service().sync()
 
-    async def scroll_chat_to_bottom(self) -> None:
-        script = (
-            "(function () {"
-            "  var el = document.querySelector('[data-neony-key=\"message-list\"]');"
-            "  if (el) { el.scrollTop = el.scrollHeight; return 'ok'; }"
-            "  return 'missing';"
-            "})()"
-        )
+    async def scroll_chat_to_bottom(self, *, force: bool = False) -> None:
+        if force:
+            script = (
+                "(function () {"
+                "  var el = document.querySelector('[data-neony-key=\"message-list\"]');"
+                "  if (el) { el.scrollTop = el.scrollHeight; return 'forced'; }"
+                "  return 'missing';"
+                "})()"
+            )
+        else:
+            script = (
+                "(function () {"
+                "  var el = document.querySelector('[data-neony-key=\"message-list\"]');"
+                "  if (!el) return 'missing';"
+                "  var distance = el.scrollHeight - el.scrollTop - el.clientHeight;"
+                "  if (distance < 80) { el.scrollTop = el.scrollHeight; return 'bottom'; }"
+                "  return 'keep:' + Math.round(distance);"
+                "})()"
+            )
         await self._runtime.eval_js(script)
 
     # ---- 配置 ----
@@ -89,6 +135,14 @@ class UiActions:
         _restart_app()
 
     # ---- 内部方法 ----
+
+    def _merge_group_roles(self, members: list[GroupMember]) -> None:
+        if not members:
+            return
+        roles = dict(self._runtime.state.group_roles())
+        for member in members:
+            roles[f"{member.group_id}:{member.uid}"] = member.role
+        self._runtime.state.group_roles.set(roles)
 
     def _chat_title(self, chat: ChatTarget) -> str:
         state = self._runtime.state

@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
 
 from neony.application.elements import Progress, Text
 from neony.dom import Div, DOMElement, Styles
+from neony.dom.reactive import effect
 
 from flaza.config import AppConfig
-from flaza.core.events import ContactsUpdated, EventBus, MessageReceived, MessageSent, MessagesSynced, Subscription
+from flaza.core.events import (
+    EventBus,
+)
 from flaza.core.models import ChatTarget
 from flaza.ui.actions import UiActions
 from flaza.ui.components.composer import Composer
@@ -51,6 +55,11 @@ class HomePage:
         self._settings_el: DOMElement | None = None
         self._new_chat: NewChatDialog | None = None
         self._new_chat_el: DOMElement | None = None
+        self._state_refresh_task: asyncio.Task[None] | None = None
+        self._state_refresh_again = False
+        self._state_force_scroll = False
+        self._bus = bus
+        actions.set_chat_view_refresher(self._refresh_async)
 
         self.session_list = SessionList(state, actions, self._on_session_selected)
         self.message_list = MessageList(state)
@@ -74,35 +83,62 @@ class HomePage:
             container=[sync_root, body],
         )
 
-        self._subscriptions: list[Subscription] = [
-            bus.subscribe(MessageReceived, self._on_message),
-            bus.subscribe(MessageSent, self._on_message),
-            bus.subscribe(MessagesSynced, self._on_messages_synced),
-            bus.subscribe(ContactsUpdated, self._on_contacts_updated),
-        ]
-        self._refresh()
+        self._apply_state()
+        # 真实依赖 effect：这里读取 Signal，信号变化时自动调度增量刷新。
+        effect(self._on_state_signal_changed)
 
     # ---- 数据刷新 ----
 
-    def _refresh(self) -> None:
+    def _apply_state(self) -> None:
         sessions = list(self._state.sessions())
         self.session_list.set_sessions(sessions)
         active = self._state.active_chat()
-        self.message_list.set_messages(active, self._state.messages())
+        self.message_list.set_messages(active, self._state.messages(), self._state.notices())
+
+    def _on_state_signal_changed(self) -> None:
+        # 建立 Effect 依赖；真实变化会进入下面的合并调度。
+        _ = (
+            self._state.sessions(),
+            self._state.active_chat(),
+            self._state.messages(),
+            self._state.notices(),
+            self._state.group_roles(),
+            self._state.self_info(),
+        )
+        self._schedule_state_refresh()
+
+    def _schedule_state_refresh(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._state_refresh_task is None:
+            task = loop.create_task(self._state_refresh_loop())
+            self._state_refresh_task = task
+            task.add_done_callback(self._state_refresh_done)
+        else:
+            self._state_refresh_again = True
+
+    def _state_refresh_done(self, task: asyncio.Task[None]) -> None:
+        self._state_refresh_task = None
+        if self._state_refresh_again:
+            self._state_refresh_again = False
+            loop = asyncio.get_running_loop()
+            new_task = loop.create_task(self._state_refresh_loop())
+            self._state_refresh_task = new_task
+            new_task.add_done_callback(self._state_refresh_done)
+
+    async def _state_refresh_loop(self) -> None:
+        self._apply_state()
+        await self._render()
+        force_scroll = self._state_force_scroll
+        self._state_force_scroll = False
+        await self._actions.scroll_chat_to_bottom(force=force_scroll)
 
     async def _refresh_async(self) -> None:
-        self._refresh()
+        self._apply_state()
         await self._render()
-
-    async def _on_message(self, _event: MessageReceived | MessageSent) -> None:
-        await self._refresh_async()
-        await self._actions.scroll_chat_to_bottom()
-
-    async def _on_contacts_updated(self, _event: ContactsUpdated) -> None:
-        await self._refresh_async()
-
-    async def _on_messages_synced(self, _event: MessagesSynced) -> None:
-        await self._refresh_async()
+        await self._actions.scroll_chat_to_bottom(force=True)
 
     # ---- 标题栏动作入口 ----
 

@@ -23,6 +23,7 @@ from flaza.core.ports import QQClient
 logger = logging.getLogger(__name__)
 
 _QR_POLL_INTERVAL_SECONDS = 2.0
+_SILENT_LOGIN_TIMEOUT_SECONDS = 15.0
 
 
 class AccountService:
@@ -39,7 +40,14 @@ class AccountService:
         await self._set_phase(LoginPhase.SILENT_LOGGING_IN)
 
         try:
-            result = await self._qq.try_silent_login()
+            result = await asyncio.wait_for(
+                self._qq.try_silent_login(),
+                timeout=_SILENT_LOGIN_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning("静默登录超时（%s 秒），进入扫码登录流程", _SILENT_LOGIN_TIMEOUT_SECONDS)
+            await self._set_phase(LoginPhase.FAILED, detail="静默登录超时，请扫码登录")
+            return
         except Exception as exc:
             logger.exception("静默登录失败")
             await self._set_phase(LoginPhase.FAILED, detail=repr(exc))

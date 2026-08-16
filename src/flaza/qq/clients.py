@@ -30,6 +30,8 @@ from flaza.core.models import (
     FriendChat,
     Group,
     GroupChat,
+    GroupMember,
+    GroupMemberRole,
     Message,
     MessageElement,
     QrCodeData,
@@ -176,9 +178,28 @@ class LagrangeQQClient:
                 group_id=raw.grp_id,
                 name=raw.info.grp_name,
                 member_count=raw.info.now_members,
+                owner_uid=raw.info.owner.uid if raw.info.owner is not None else None,
             )
             for raw in response.grp_list
         ]
+
+    async def fetch_group_members(self, group_id: int) -> list[GroupMember]:
+        """分页拉取群成员身份。"""
+        client = self._require_client()
+        response = await client.get_grp_members(group_id)
+        members = _member_bodies_to_domain(group_id, response.body)
+        next_key = response.next_key
+        while next_key:
+            response = await client.get_grp_members(group_id, next_key.decode())
+            members.extend(_member_bodies_to_domain(group_id, response.body))
+            next_key = response.next_key
+        return members
+
+    async def fetch_group_member(self, group_id: int, uid: str) -> GroupMember | None:
+        """查询指定群成员的即时身份。"""
+        response = await self._require_client().get_grp_member_info(group_id, uid)
+        members = _member_bodies_to_domain(group_id, response.body)
+        return members[0] if members else None
 
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         client = self._require_client()
@@ -340,6 +361,29 @@ async def _get_group_last_seq(client: Client, group_id: int) -> int:
         return 0
     seq = args.get(22)
     return int(seq) if isinstance(seq, int) and seq > 0 else 0
+
+
+def _member_bodies_to_domain(group_id: int, bodies: list[Any]) -> list[GroupMember]:
+    members: list[GroupMember] = []
+    for body in bodies:
+        role = GroupMemberRole.MEMBER
+        if body.is_owner:
+            role = GroupMemberRole.OWNER
+        elif body.is_admin:
+            role = GroupMemberRole.ADMIN
+        account = body.account
+        if account is None:
+            continue
+        members.append(
+            GroupMember(
+                group_id=group_id,
+                uid=account.uid,
+                uin=account.uin or 0,
+                nickname=body.nickname,
+                role=role,
+            )
+        )
+    return members
 
 
 def _sync_start(after_seq: int, latest_seq: int, limit: int) -> int | None:

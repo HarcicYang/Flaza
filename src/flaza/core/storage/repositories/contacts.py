@@ -43,14 +43,23 @@ class ContactRepository:
         """插入或更新一个群资料。"""
         await self._db.execute(
             """
-            INSERT INTO groups (group_id, name, member_count, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO groups (group_id, name, member_count, owner_uid, updated_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT (group_id) DO UPDATE SET
                 name = excluded.name,
                 member_count = excluded.member_count,
+                owner_uid = excluded.owner_uid,
                 updated_at = excluded.updated_at
             """,
-            (group.group_id, group.name, group.member_count, int(time.time())),
+            (group.group_id, group.name, group.member_count, group.owner_uid, int(time.time())),
+        )
+        await self._db.commit()
+
+    async def update_group_name(self, group_id: int, name: str) -> None:
+        """只更新群名称。"""
+        await self._db.execute(
+            "UPDATE groups SET name = ?, updated_at = ? WHERE group_id = ?",
+            (name, int(time.time()), group_id),
         )
         await self._db.commit()
 
@@ -62,6 +71,14 @@ class ContactRepository:
 
     async def list_groups(self) -> list[Group]:
         """返回全部群资料。"""
-        cursor = await self._db.execute("SELECT group_id, name, member_count FROM groups ORDER BY group_id")
+        cursor = await self._db.execute("SELECT group_id, name, member_count, owner_uid FROM groups ORDER BY group_id")
         rows = await cursor.fetchall()
-        return [Group(group_id=row["group_id"], name=row["name"], member_count=row["member_count"]) for row in rows]
+        return [
+            Group(
+                group_id=row["group_id"],
+                name=row["name"],
+                member_count=row["member_count"],
+                owner_uid=row["owner_uid"],
+            )
+            for row in rows
+        ]

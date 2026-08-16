@@ -12,9 +12,11 @@ from typing import TypeVar
 from pydantic import BaseModel, ConfigDict
 
 from flaza.core.models import (
+    ChatTarget,
     ConnectionState,
     Friend,
     Group,
+    GroupMember,
     LoginPhase,
     Message,
     QrCodeData,
@@ -66,6 +68,74 @@ class MessageSent(FlazaEvent):
     """成功发送一条消息。"""
 
     message: Message
+
+
+class MessageRecalled(FlazaEvent):
+    """消息被撤回。"""
+
+    chat: ChatTarget
+    seq: int
+    timestamp: int = 0
+    operator_uid: str = ""
+
+
+class GroupNameChanged(FlazaEvent):
+    """群名变更。"""
+
+    group_id: int
+    name_new: str
+    operator_uid: str = ""
+    timestamp: int = 0
+
+
+class GroupMemberJoined(FlazaEvent):
+    """群成员加入。"""
+
+    group_id: int
+    uid: str
+    uin: int = 0
+    join_type: int = 0
+    timestamp: int = 0
+
+
+class GroupMemberQuit(FlazaEvent):
+    """群成员退出或被移出。"""
+
+    group_id: int
+    uid: str
+    uin: int = 0
+    exit_type: int = 0
+    operator_uid: str = ""
+    timestamp: int = 0
+
+    @property
+    def is_kicked(self) -> bool:
+        return self.exit_type in (3, 131)
+
+
+class GroupAdminChanged(FlazaEvent):
+    """群管理员设置变更。"""
+
+    group_id: int
+    uid: str
+    is_set: bool
+    timestamp: int = 0
+
+
+class GroupMemberMuted(FlazaEvent):
+    """群成员被禁言；target_uid 为空表示全员禁言。"""
+
+    group_id: int
+    operator_uid: str
+    target_uid: str
+    duration: int
+    timestamp: int = 0
+
+
+class GroupMembersUpdated(FlazaEvent):
+    """群成员身份缓存更新完成。"""
+
+    members: list[GroupMember]
 
 
 class MessagesSynced(FlazaEvent):

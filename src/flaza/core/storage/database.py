@@ -13,6 +13,7 @@ from typing import Self
 import aiosqlite
 
 from flaza.core.storage.repositories.contacts import ContactRepository
+from flaza.core.storage.repositories.members import GroupMemberRepository
 from flaza.core.storage.repositories.messages import MessageRepository
 from flaza.core.storage.repositories.sessions import SessionRepository
 
@@ -29,8 +30,22 @@ CREATE TABLE IF NOT EXISTS groups (
     group_id     INTEGER PRIMARY KEY,
     name         TEXT NOT NULL DEFAULT '',
     member_count INTEGER NOT NULL DEFAULT 0,
+    owner_uid    TEXT,
     updated_at   INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id   INTEGER NOT NULL,
+    uid        TEXT NOT NULL,
+    uin        INTEGER NOT NULL DEFAULT 0,
+    nickname   TEXT NOT NULL DEFAULT '',
+    role       TEXT NOT NULL DEFAULT 'member',
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (group_id, uid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_members_group
+    ON group_members (group_id);
 
 CREATE TABLE IF NOT EXISTS read_cursors (
     chat_kind    TEXT NOT NULL,
@@ -49,6 +64,7 @@ CREATE TABLE IF NOT EXISTS messages (
     rand          INTEGER,
     timestamp     INTEGER NOT NULL,
     from_self     INTEGER NOT NULL DEFAULT 0,
+    recalled      INTEGER NOT NULL DEFAULT 0,
     text          TEXT NOT NULL DEFAULT '',
     payload       BLOB NOT NULL,
     UNIQUE (chat_kind, chat_id, seq)
@@ -76,6 +92,7 @@ class Storage:
     def __init__(self) -> None:
         self._db: aiosqlite.Connection | None = None
         self.contacts = ContactRepository(self)
+        self.members = GroupMemberRepository(self)
         self.messages = MessageRepository(self)
         self.sessions = SessionRepository(self)
 
@@ -91,6 +108,7 @@ class Storage:
         self._db = await aiosqlite.connect(database_path)
         self._db.row_factory = sqlite3.Row
         await self._db.executescript(_SCHEMA)
+        await self._migrate()
         await self._db.commit()
         return self
 
@@ -101,6 +119,21 @@ class Storage:
         await self._db.commit()
         await self._db.close()
         self._db = None
+
+    async def _migrate(self) -> None:
+        """为旧版本数据库补充新增列。"""
+        db = self._db
+        assert db is not None
+
+        async def has_column(table: str, column: str) -> bool:
+            cursor = await db.execute(f"PRAGMA table_info({table})")
+            rows = await cursor.fetchall()
+            return any(row["name"] == column for row in rows)
+
+        if await has_column("messages", "recalled") is False:
+            await db.execute("ALTER TABLE messages ADD COLUMN recalled INTEGER NOT NULL DEFAULT 0")
+        if await has_column("groups", "owner_uid") is False:
+            await db.execute("ALTER TABLE groups ADD COLUMN owner_uid TEXT")
 
     def require_db(self) -> aiosqlite.Connection:
         """返回已初始化的连接；未初始化时抛出明确错误。"""

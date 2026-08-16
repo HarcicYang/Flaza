@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from flaza.core.models.chat import ChatTarget
+from flaza.core.models.contact import GroupMemberRole
 
 
 class TextElement(BaseModel):
@@ -38,6 +39,9 @@ class Message(BaseModel):
     timestamp: int
     elements: list[MessageElement]
     from_self: bool = False
+    recalled: bool = False
+    sender_is_bot: bool = False
+    sender_role: GroupMemberRole = GroupMemberRole.MEMBER
 
     @property
     def text(self) -> str:

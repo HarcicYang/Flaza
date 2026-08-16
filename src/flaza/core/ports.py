@@ -10,6 +10,7 @@ from flaza.core.models import (
     ChatTarget,
     Friend,
     Group,
+    GroupMember,
     Message,
     MessageElement,
     QrCodeData,
@@ -58,6 +59,12 @@ class QQClient(Protocol):
 
     async def fetch_groups(self) -> list[Group]:
         """拉取群列表。"""
+
+    async def fetch_group_members(self, group_id: int) -> list[GroupMember]:
+        """拉取指定群的成员身份列表。"""
+
+    async def fetch_group_member(self, group_id: int, uid: str) -> GroupMember | None:
+        """查询指定群成员的即时身份。"""
 
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         """发送一条消息并返回领域消息模型。"""

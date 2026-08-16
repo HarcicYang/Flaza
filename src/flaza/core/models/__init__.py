@@ -9,7 +9,7 @@ from flaza.core.models.account import (
     SilentLoginResult,
 )
 from flaza.core.models.chat import ChatTarget, FriendChat, GroupChat
-from flaza.core.models.contact import Friend, Group
+from flaza.core.models.contact import Friend, Group, GroupMember, GroupMemberRole
 from flaza.core.models.message import Message, MessageElement, StoredMessage, TextElement
 from flaza.core.models.session import Session
 
@@ -20,6 +20,8 @@ __all__ = [
     "FriendChat",
     "Group",
     "GroupChat",
+    "GroupMember",
+    "GroupMemberRole",
     "LoginPhase",
     "Message",
     "MessageElement",

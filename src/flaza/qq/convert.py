@@ -11,6 +11,7 @@ from lagrange.client.message.elems import Text
 from flaza.core.models import (
     FriendChat,
     GroupChat,
+    GroupMemberRole,
     Message,
     MessageElement,
     TextElement,
@@ -52,6 +53,8 @@ def group_message_to_domain(event: GroupMessage, self_uin: int) -> Message:
         timestamp=event.time,
         elements=_convert_elements(event.msg_chain),
         from_self=event.uin == self_uin,
+        sender_is_bot=event.is_bot,
+        sender_role=GroupMemberRole.BOT if event.is_bot else GroupMemberRole.MEMBER,
     )
 
 

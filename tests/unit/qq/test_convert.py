@@ -4,6 +4,7 @@ from lagrange.client.events.friend import FriendMessage
 from lagrange.client.events.group import GroupMessage
 from lagrange.client.message.elems import Text
 
+from flaza.core.models import GroupMemberRole
 from flaza.qq.convert import friend_message_to_domain, group_message_to_domain
 
 
@@ -47,6 +48,27 @@ def test_self_sent_friend_message_uses_peer_target() -> None:
     message = friend_message_to_domain(event, self_uin=10002)
     assert message.chat.key == "friend:u_1"
     assert message.from_self is True
+
+
+def test_group_bot_message_has_bot_role() -> None:
+    event = GroupMessage(
+        grp_id=20002,
+        uin=10001,
+        grp_name="测试群",
+        nickname="机器人",
+        uid="u_bot",
+        seq=13,
+        time=1700000000,
+        rand=14,
+        sub_id=1,
+        sender_type=3091,
+        msg="你好",
+        msg_chain=[Text(text="你好")],
+    )
+
+    message = group_message_to_domain(event, self_uin=10002)
+    assert message.sender_is_bot is True
+    assert message.sender_role == GroupMemberRole.BOT
 
 
 def test_group_message_conversion() -> None:

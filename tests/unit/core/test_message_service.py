@@ -11,6 +11,7 @@ from flaza.core.models import (
     FriendChat,
     Group,
     GroupChat,
+    GroupMember,
     Message,
     MessageElement,
     QrCodeData,
@@ -54,6 +55,12 @@ class FakeQQ:
         raise NotImplementedError
 
     async def fetch_groups(self) -> list[Group]:
+        raise NotImplementedError
+
+    async def fetch_group_members(self, group_id: int) -> list[GroupMember]:
+        raise NotImplementedError
+
+    async def fetch_group_member(self, group_id: int, uid: str) -> GroupMember | None:
         raise NotImplementedError
 
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:

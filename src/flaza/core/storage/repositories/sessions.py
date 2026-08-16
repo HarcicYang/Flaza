@@ -32,7 +32,7 @@ class SessionRepository:
                 s.message_count   AS message_count,
                 s.last_message_id AS last_message_id,
                 s.last_timestamp  AS last_timestamp,
-                m.text            AS last_text,
+                CASE WHEN m.recalled THEN '撤回了一条消息' ELSE m.text END AS last_text,
                 f.uin             AS friend_uin,
                 f.nickname        AS friend_nickname,
                 f.remark          AS friend_remark,

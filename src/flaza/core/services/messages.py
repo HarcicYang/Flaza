@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 
-from flaza.core.events import EventBus, MessageReceived, MessageSent, MessagesSynced
+from flaza.core.events import EventBus, MessageRecalled, MessageReceived, MessageSent, MessagesSynced
 from flaza.core.models import ChatTarget, FriendChat, GroupChat, Message, MessageElement, TextElement
 from flaza.core.ports import QQClient
 from flaza.core.storage import Storage
@@ -77,3 +77,7 @@ class MessageService:
     async def mark_read(self, chat: ChatTarget, last_read_id: int) -> None:
         """把会话已读游标推进到指定本地消息 id。"""
         await self._storage.messages.mark_read(chat, last_read_id)
+
+    async def on_message_recalled(self, event: MessageRecalled) -> None:
+        """把撤回事件落到对应消息上。"""
+        await self._storage.messages.mark_recalled(event.chat, event.seq)

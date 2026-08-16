@@ -207,7 +207,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
-    { name = "lagrange-python", git = "https://github.com/LagrangeDev/lagrange-python.git" },
+    { name = "lagrange-python", git = "https://github.com/HarcicYang/lagrange-python.git" },
     { name = "msgpack", specifier = ">=1.1" },
     { name = "neony", specifier = ">=0.2.0.post1" },
 ]
@@ -231,7 +231,7 @@ wheels = [
 [[package]]
 name = "lagrange-python"
 version = "0.1.8"
-source = { git = "https://github.com/LagrangeDev/lagrange-python.git#f122b4f93f577caa4c1500c828fdd223aefbed43" }
+source = { git = "https://github.com/HarcicYang/lagrange-python.git#d04ca0e463083ae3d1acd94815e80c3ebcd933ae" }
 dependencies = [
     { name = "cryptography" },
     { name = "qrcode" },

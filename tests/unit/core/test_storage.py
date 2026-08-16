@@ -1,11 +1,77 @@
 """异步 SQLite 存储集成测试。"""
 
 import asyncio
+import sqlite3
 from pathlib import Path
 
-from flaza.core.models import Friend, FriendChat, Group, GroupChat, Message, TextElement
+import aiosqlite
+
+from flaza.core.models import Friend, FriendChat, Group, GroupChat, GroupMember, GroupMemberRole, Message, TextElement
 from flaza.core.storage import Storage
 from flaza.ui.state import UiStateStore
+
+
+def test_storage_migrates_existing_database(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        path = tmp_path / "old.db"
+        db = await aiosqlite.connect(path)
+        db.row_factory = sqlite3.Row
+        await db.execute(
+            "CREATE TABLE groups (group_id INTEGER PRIMARY KEY, name TEXT, member_count INTEGER, updated_at INTEGER)"
+        )
+        await db.execute(
+            "CREATE TABLE messages ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, chat_kind TEXT, chat_id TEXT, sender_uin INTEGER, "
+            "seq INTEGER, client_seq INTEGER, rand INTEGER, timestamp INTEGER, from_self INTEGER, "
+            "text TEXT, payload BLOB, UNIQUE(chat_kind, chat_id, seq))"
+        )
+        await db.commit()
+        await db.close()
+
+        storage = Storage()
+        await storage.init(path)
+        cursor = await storage.require_db().execute("PRAGMA table_info(messages)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        assert "recalled" in columns
+        cursor = await storage.require_db().execute("PRAGMA table_info(groups)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        assert "owner_uid" in columns
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_storage_mark_recalled_and_member_roles(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+
+        chat = GroupChat(group_id=20002)
+        await storage.messages.insert(
+            Message(
+                chat=chat, sender_uin=1, sender_uid="u_1", seq=10, timestamp=100, elements=[TextElement(text="机密")]
+            )
+        )
+        assert await storage.messages.mark_recalled(chat, 10) is True
+        recalled = await storage.messages.list_recent(chat)
+        assert recalled[0].message.recalled is True
+
+        member = GroupMember(group_id=20002, uid="u_1", uin=1, nickname="小明", role=GroupMemberRole.ADMIN)
+        await storage.members.upsert(member)
+        cached = await storage.members.get(20002, "u_1")
+        assert cached is not None and cached.role is GroupMemberRole.ADMIN
+        await storage.members.set_role(20002, "u_1", GroupMemberRole.OWNER)
+        cached = await storage.members.get(20002, "u_1")
+        assert cached is not None and cached.role is GroupMemberRole.OWNER
+        await storage.members.remove(20002, "u_1")
+        assert await storage.members.get(20002, "u_1") is None
+
+        sessions = await storage.sessions.list_recent()
+        assert sessions[0].last_text == "撤回了一条消息"
+
+        await storage.close()
+
+    asyncio.run(scenario())
 
 
 def test_storage_messages_contacts_and_sessions(tmp_path: Path) -> None:
@@ -61,6 +127,8 @@ def test_storage_messages_contacts_and_sessions(tmp_path: Path) -> None:
         recent = await storage.messages.list_recent(friend_chat)
         assert [stored.message.text for stored in recent] == ["你好", "第二条"]
         assert [stored.id for stored in recent] == [friend_id, friend_id_2]
+        recent_one = await storage.messages.list_recent(friend_chat, limit=1)
+        assert [stored.message.text for stored in recent_one] == ["第二条"]
 
         assert await storage.messages.latest_id(friend_chat) == friend_id_2
         assert await storage.messages.latest_seq(friend_chat) == 11
