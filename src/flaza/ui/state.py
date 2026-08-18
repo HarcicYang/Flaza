@@ -76,6 +76,7 @@ class UiStateStore:
         self.messages = Signal[tuple[StoredMessage, ...]](())
         self.notices = Signal[tuple[ChatNotice, ...]](())
         self.group_roles = Signal[dict[str, GroupMemberRole]]({})
+        self.has_older_messages = Signal(False)
 
     def set_render(self, render: RenderCallback | None) -> None:
         """注入 Neony 渲染回调，由应用组装根调用。"""
@@ -111,6 +112,7 @@ class UiStateStore:
         self.active_chat.set(chat)
         messages = await self._storage.messages.list_recent(chat)
         self.messages.set(tuple(messages))
+        self.has_older_messages.set(bool(messages) and await self._storage.messages.has_before(chat, messages[0].id))
         await self._request_render()
 
     async def refresh_sessions(self) -> None:

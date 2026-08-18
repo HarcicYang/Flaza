@@ -69,5 +69,11 @@ class QQClient(Protocol):
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         """发送一条消息并返回领域消息模型。"""
 
+    async def send_file(self, target: ChatTarget, path: str, filename: str | None = None) -> Message:
+        """发送本地文件并返回领域消息模型。"""
+
+    async def recall_message(self, target: ChatTarget, seq: int) -> None:
+        """撤回自己发送的指定 seq 消息。"""
+
     async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
         """补拉指定会话在 after_seq 之后的消息。"""

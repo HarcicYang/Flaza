@@ -252,6 +252,8 @@ def test_storage_messages_contacts_and_sessions(tmp_path: Path) -> None:
         assert await storage.messages.latest_id(friend_chat) == friend_id_2
         assert await storage.messages.latest_seq(friend_chat) == 11
         assert await storage.messages.list_before(friend_chat, friend_id) == []
+        assert await storage.messages.has_before(friend_chat, friend_id) is False
+        assert await storage.messages.has_before(friend_chat, friend_id_2) is True
         after = await storage.messages.list_after(friend_chat, friend_id)
         assert [stored.message.text for stored in after] == ["第二条"]
 

@@ -87,10 +87,51 @@ class ApplicationRuntime:
             return
         await self._neony_app.render()
 
-    async def eval_js(self, script: str) -> None:
+    async def eval_js(self, script: str) -> str:
         if self._neony_app is None:
-            return
-        await self._neony_app.eval_js(script)
+            return ""
+        return await self._neony_app.eval_js(script)
+
+    async def open_files(
+            self,
+            *,
+            title: str = "打开",
+            default_dir: str | None = None,
+            filetypes: list[tuple[str, str]] | None = None,
+    ) -> list[str]:
+        """打开系统原生多选文件对话框；未挂载应用时返回空列表。"""
+        if self._neony_app is None:
+            return []
+        return await self._neony_app.open_files(title=title, default_dir=default_dir, filetypes=filetypes)
+
+    async def save_file(
+            self,
+            *,
+            title: str = "另存为",
+            default_dir: str | None = None,
+            default_name: str | None = None,
+            filetypes: list[tuple[str, str]] | None = None,
+    ) -> str | None:
+        """打开系统原生保存文件对话框；未挂载应用时返回 None。"""
+        if self._neony_app is None:
+            return None
+        return await self._neony_app.save_file(
+            title=title,
+            default_dir=default_dir,
+            default_name=default_name,
+            filetypes=filetypes,
+        )
+
+    async def clipboard_write(self, text: str) -> None:
+        """写入系统剪贴板；未挂载应用时静默跳过。"""
+        if self._neony_app is not None:
+            await self._neony_app.clipboard_write(text)
+
+    async def clipboard_read(self) -> bytes | str:
+        """读取系统剪贴板；未挂载应用时返回空字符串。"""
+        if self._neony_app is None:
+            return ""
+        return await self._neony_app.clipboard_read()
 
     async def set_theme(self, theme_name: str) -> None:
         """立即应用主题；应用尚未创建时静默跳过。"""

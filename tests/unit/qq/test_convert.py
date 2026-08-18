@@ -38,7 +38,12 @@ from flaza.core.models import (
     UnknownElement,
     VideoElement,
 )
-from flaza.qq.convert import friend_message_to_domain, group_message_to_domain
+from flaza.qq.convert import (
+    friend_message_to_domain,
+    group_message_to_domain,
+    lagrange_file_to_domain,
+    lagrange_image_to_domain,
+)
 
 _IMAGE = Image(
     name="pic.png",
@@ -91,6 +96,39 @@ def _friend_event(*elements: Any) -> FriendMessage:
         msg="",
         msg_chain=list(elements),
     )
+
+
+def test_lagrange_image_to_domain_keeps_upload_fields() -> None:
+    element = lagrange_image_to_domain(_IMAGE)
+
+    assert element.url == "https://example.com/pic.png"
+    assert element.name == "pic.png"
+    assert element.size == 1024
+    assert element.md5 == b"md5"
+    assert element.width == 640
+    assert element.height == 480
+    assert element.display_name == "[图片]"
+    assert element.local_path == ""
+
+
+def test_lagrange_file_to_domain_keeps_upload_fields() -> None:
+    file = File(
+        file_size=2048,
+        file_name="资料.zip",
+        file_md5=b"file-md5",
+        file_url=None,
+        file_id="f1",
+        file_uuid="u1",
+        file_hash="h1",
+    )
+    element = lagrange_file_to_domain(file)
+
+    assert element.file_name == "资料.zip"
+    assert element.file_size == 2048
+    assert element.file_id == "f1"
+    assert element.file_uuid == "u1"
+    assert element.file_hash == "h1"
+    assert element.md5 == b"file-md5"
 
 
 def test_friend_message_conversion() -> None:

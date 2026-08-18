@@ -119,6 +119,22 @@ def test_viewer_actual_size_falls_back_to_fit_without_dimensions() -> None:
         await viewer.open(ImagePreview(src="https://example.com/pic.png"))
         await viewer._show_actual_size()
         assert viewer._fit is True
-        assert viewer._image.styles.max_width == "90vw"
+        assert viewer._image.styles.max_width == "100%"
+
+    asyncio.run(scenario())
+
+
+def test_viewer_zoomed_image_uses_full_canvas() -> None:
+    async def scenario() -> None:
+        viewer = _viewer([])
+        await viewer.open(ImagePreview(src="https://example.com/pic.png", width=640, height=480))
+        await viewer._show_actual_size()
+        await viewer._set_scale(3.0)
+
+        assert viewer._stage.styles.width == "100%"
+        assert viewer._stage.styles.max_width is None
+        assert viewer._stage.styles.max_height is None
+        assert viewer._image.styles.max_width is None
+        assert "scale(3.0)" in str(viewer._image.styles.transform)
 
     asyncio.run(scenario())

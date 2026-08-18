@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Sequence
 
 from flaza.core.events import (
@@ -14,7 +15,15 @@ from flaza.core.events import (
     MessageSent,
     MessagesSynced,
 )
-from flaza.core.models import ChatTarget, FriendChat, GroupChat, Message, MessageElement, TextElement
+from flaza.core.models import (
+    ChatTarget,
+    FriendChat,
+    GroupChat,
+    ImageElement,
+    Message,
+    MessageElement,
+    TextElement,
+)
 from flaza.core.ports import QQClient
 from flaza.core.services.media_cache import MediaCache
 from flaza.core.storage import Storage
@@ -42,14 +51,33 @@ class MessageService:
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         """通过协议端口发送消息，持久化并标记已读后发布 MessageSent。"""
         message = await self._qq.send_message(target, elements)
-        local_id = await self._storage.messages.insert(message)
-        await self._storage.messages.mark_read(target, local_id)
-        self._bus.publish(MessageSent(message=message))
-        return message
+        return await self._persist_sent_message(message)
 
     async def send_text(self, target: ChatTarget, text: str) -> Message:
         """发送纯文本消息的便利方法。"""
         return await self.send_message(target, [TextElement(text=text)])
+
+    async def send_image(self, target: ChatTarget, path: str) -> Message:
+        """发送本地图片的便利方法。"""
+        return await self.send_message(target, [ImageElement(local_path=path)])
+
+    async def send_file(self, target: ChatTarget, path: str, filename: str | None = None) -> Message:
+        """发送本地文件的便利方法。"""
+        message = await self._qq.send_file(target, path, filename)
+        return await self._persist_sent_message(message)
+
+    async def _persist_sent_message(self, message: Message) -> Message:
+        """持久化自己发送的消息，标记已读并发布 MessageSent。"""
+        local_id = await self._storage.messages.insert(message)
+        await self._storage.messages.mark_read(message.chat, local_id)
+        self._bus.publish(MessageSent(message=message))
+        return message
+
+    async def recall_message(self, target: ChatTarget, seq: int) -> None:
+        """撤回自己发送的消息，并立即把撤回状态持久化与广播。"""
+        await self._qq.recall_message(target, seq)
+        await self._storage.messages.mark_recalled(target, seq)
+        self._bus.publish(MessageRecalled(chat=target, seq=seq, timestamp=int(time.time())))
 
     async def on_message_received(self, event: MessageReceived) -> None:
         """入站消息事件处理器：先持久化，再交给后续 UI 订阅者。"""

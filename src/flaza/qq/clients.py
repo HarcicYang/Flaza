@@ -7,6 +7,7 @@ import json
 import logging
 import time
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -32,6 +33,7 @@ from flaza.core.models import (
     GroupChat,
     GroupMember,
     GroupMemberRole,
+    ImageElement,
     Message,
     MessageElement,
     QrCodeData,
@@ -41,7 +43,12 @@ from flaza.core.models import (
     TextElement,
 )
 from flaza.qq.adapter import LagrangeEventAdapter
-from flaza.qq.convert import friend_message_to_domain, group_message_to_domain
+from flaza.qq.convert import (
+    friend_message_to_domain,
+    group_message_to_domain,
+    lagrange_file_to_domain,
+    lagrange_image_to_domain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -203,8 +210,14 @@ class LagrangeQQClient:
 
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         client = self._require_client()
-        chain = [self._to_lagrange_element(element) for element in elements]
+        chain: list[Any] = []
+        outgoing: list[MessageElement] = []
+        for element in elements:
+            lagrange_element, domain_element = await self._prepare_outgoing_element(target, element)
+            chain.append(lagrange_element)
+            outgoing.append(domain_element)
 
+        logger.info("准备发送消息: chat=%s element_count=%s", target.key, len(chain))
         if isinstance(target, FriendChat):
             seq = await client.send_friend_msg(uid=target.uid, msg_chain=chain)
         elif isinstance(target, GroupChat):
@@ -212,6 +225,12 @@ class LagrangeQQClient:
         else:
             raise TypeError(f"未知会话目标: {target!r}")
 
+        logger.info(
+            "消息发送完成: chat=%s seq=%s elements=%s",
+            target.key,
+            seq,
+            [type(element).__name__ for element in outgoing],
+        )
         self_info = await self.get_self_info()
         return Message(
             chat=target,
@@ -220,9 +239,62 @@ class LagrangeQQClient:
             sender_name=self_info.nickname,
             seq=seq,
             timestamp=int(time.time()),
-            elements=list(elements),
+            elements=outgoing,
             from_self=True,
         )
+
+    async def send_file(self, target: ChatTarget, path: str, filename: str | None = None) -> Message:
+        """发送本地文件。
+
+        好友文件上传即发送；群文件通过文件服务发送。两者都不会返回协议
+        seq，因此发送前记录会话最新 seq，发送后轮询等待会话 seq 前进，
+        再把文件元素与最新 seq 组装为领域消息。
+        """
+        client = self._require_client()
+        file_path = Path(path)
+        if not file_path.is_file():
+            raise FileNotFoundError(path)
+        file_name = filename or file_path.name
+
+        if isinstance(target, FriendChat):
+            before_seq = await client.get_friend_latest_seq(target.uid)
+            with file_path.open("rb") as file:
+                lagrange_file = await client.upload_friend_file(file, target.uid, file_name)
+            seq = await self._poll_friend_latest_seq(client, target.uid, before_seq)
+            file_url = await self._fetch_friend_file_url(client, target.uid, lagrange_file)
+        elif isinstance(target, GroupChat):
+            before_seq = await _get_group_last_seq(client, target.group_id)
+            with file_path.open("rb") as file:
+                lagrange_file = await client.upload_grp_file(file, target.group_id, "/", file_name)
+            seq = await self._poll_group_last_seq(client, target.group_id, before_seq)
+            file_url = await self._fetch_group_file_url(client, target.group_id, lagrange_file)
+        else:
+            raise TypeError(f"未知会话目标: {target!r}")
+
+        element = lagrange_file_to_domain(lagrange_file)
+        if file_url:
+            element = element.model_copy(update={"file_url": file_url})
+        self_info = await self.get_self_info()
+        return Message(
+            chat=target,
+            sender_uin=self_info.uin,
+            sender_uid=self_info.uid,
+            sender_name=self_info.nickname,
+            seq=seq,
+            timestamp=int(time.time()),
+            elements=[element],
+            from_self=True,
+        )
+
+    async def recall_message(self, target: ChatTarget, seq: int) -> None:
+        """撤回自己发送的消息。"""
+        client = self._require_client()
+        if isinstance(target, FriendChat):
+            await client.recall_friend_msg(target.uid, seq)
+        elif isinstance(target, GroupChat):
+            await client.recall_grp_msg(target.group_id, seq)
+        else:
+            raise TypeError(f"未知会话目标: {target!r}")
 
     async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
         """补拉指定会话在 after_seq 之后的消息，单会话最多拉取 limit 条。
@@ -275,11 +347,72 @@ class LagrangeQQClient:
             raise RuntimeError("InfoManager 尚未初始化")
         return self._info
 
-    @staticmethod
-    def _to_lagrange_element(element: MessageElement) -> Any:
+    async def _prepare_outgoing_element(
+        self,
+        target: ChatTarget,
+        element: MessageElement,
+    ) -> tuple[Any, MessageElement]:
+        """把领域元素转换为 lagrange 元素，并返回持久化用的领域元素。"""
         if isinstance(element, TextElement):
-            return Text(text=element.text)
+            return Text(text=element.text), element
+        if isinstance(element, ImageElement) and element.local_path:
+            uploaded = await self._upload_image(target, element.local_path)
+            if isinstance(target, GroupChat) and getattr(uploaded, "id", 0) == 0:
+                raise RuntimeError("群图片上传后未返回 fileid，无法发送")
+            logger.info("图片上传完成: chat=%s name=%s", target.key, uploaded.name)
+            domain = lagrange_image_to_domain(uploaded)
+            # 自己发送的图片暂时没有媒体缓存，先复用本地原图路径渲染，
+            # 后续收到协议回包/媒体缓存后再替换为缓存路径。
+            return uploaded, domain.model_copy(update={"cached_path": element.local_path})
         raise TypeError(f"暂不支持的发送元素: {type(element).__name__}")
+
+    async def _upload_image(self, target: ChatTarget, path: str) -> Any:
+        """把本地图片上传到对应会话并返回 lagrange Image。"""
+        client = self._require_client()
+        with open(path, "rb") as image:
+            if isinstance(target, FriendChat):
+                return await client.upload_friend_image(image, target.uid)
+            if isinstance(target, GroupChat):
+                return await client.upload_grp_image(image, target.group_id)
+        raise TypeError(f"未知会话目标: {target!r}")
+
+    async def _poll_friend_latest_seq(self, client: Client, uid: str, before_seq: int, timeout: float = 5.0) -> int:
+        """等待好友会话最新 seq 前进，返回新的最新 seq。"""
+        deadline = time.monotonic() + timeout
+        while True:
+            latest = await client.get_friend_latest_seq(uid)
+            if latest > before_seq:
+                return latest
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"等待好友文件消息 seq 超时: uid={uid} before={before_seq}")
+            await asyncio.sleep(0.2)
+
+    async def _poll_group_last_seq(self, client: Client, group_id: int, before_seq: int, timeout: float = 5.0) -> int:
+        """等待群会话最新 seq 前进，返回新的最新 seq。"""
+        deadline = time.monotonic() + timeout
+        while True:
+            latest = await _get_group_last_seq(client, group_id)
+            if latest > before_seq:
+                return latest
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"等待群文件消息 seq 超时: group={group_id} before={before_seq}")
+            await asyncio.sleep(0.2)
+
+    async def _fetch_friend_file_url(self, client: Client, uid: str, lagrange_file: Any) -> str | None:
+        try:
+            if lagrange_file.file_uuid and lagrange_file.file_hash:
+                return await client.fetch_friend_file_url(lagrange_file.file_uuid, lagrange_file.file_hash, uid)
+        except Exception:
+            logger.debug("获取好友文件下载链接失败: uid=%s", uid, exc_info=True)
+        return None
+
+    async def _fetch_group_file_url(self, client: Client, group_id: int, lagrange_file: Any) -> str | None:
+        try:
+            if lagrange_file.file_id:
+                return await client.fetch_grp_file_url(group_id, lagrange_file.file_id)
+        except Exception:
+            logger.debug("获取群文件下载链接失败: group=%s", group_id, exc_info=True)
+        return None
 
 
 _FRIEND_MSG_EMPTY_RETCODE = 100000301

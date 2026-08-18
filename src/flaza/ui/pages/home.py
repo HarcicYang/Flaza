@@ -4,18 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
 
-from neony.application.elements import Progress, Text
+from neony.application.elements import Progress, Text, Toast
 from neony.application.theme import stub
-from neony.dom import Border, Div, DOMElement, Styles
+from neony.dom import Border, Color, Div, DOMElement, Signal, Styles
 from neony.dom.reactive import effect
 
 from flaza.config import AppConfig
 from flaza.core.events import (
     EventBus,
 )
-from flaza.core.models import ChatTarget
+from flaza.core.models import ChatTarget, FileElement, StoredMessage
 from flaza.ui.actions import UiActions
 from flaza.ui.components.composer import Composer
 from flaza.ui.components.image_viewer import ImageViewer
@@ -24,6 +25,8 @@ from flaza.ui.components.new_chat_dialog import NewChatDialog
 from flaza.ui.components.session_list import SessionList
 from flaza.ui.components.settings_dialog import SettingsDialog
 from flaza.ui.state import UiStateStore
+
+logger = logging.getLogger(__name__)
 
 _BODY = Styles(display="flex", flex_grow="1", min_height="0", width="100%")
 
@@ -36,6 +39,30 @@ _CHAT_HEADER = Styles(
     padding="10px 16px",
     border_bottom="1px solid var(--color-border)",
     flex_shrink="0",
+)
+
+_DROP_HINT = Styles(
+    position="fixed",
+    top="0",
+    left="0",
+    width="100%",
+    height="100%",
+    z_index="1200",
+    display="flex",
+    align_items="center",
+    justify_content="center",
+    pointer_events="none",
+    background_color=Color(rgba=(0, 0, 0, 0.30)),
+)
+
+_DROP_HINT_CARD = Styles(
+    padding="18px 28px",
+    border_radius="14px",
+    background_color=stub.surface,
+    border=Border(width="1px", color=stub.border_glass),
+    color=stub.text_primary,
+    font_size="15px",
+    box_shadow="0 16px 48px var(--color-shadow)",
 )
 
 _SYNC_FLOAT = Styles(
@@ -74,14 +101,21 @@ class HomePage:
         self._new_chat_el: DOMElement | None = None
         self._state_refresh_task: asyncio.Task[None] | None = None
         self._state_refresh_again = False
-        self._state_force_scroll = False
+        self._refresh_lock = asyncio.Lock()
         self._bus = bus
         actions.set_chat_view_refresher(self._refresh_async)
 
         self.session_list = SessionList(state, actions, self._on_session_selected)
         self.image_viewer = ImageViewer(render)
-        self.message_list = MessageList(state, self.image_viewer.open)
-        self.composer = Composer(actions, render)
+        self.message_list = MessageList(
+            state,
+            on_image_click=self.image_viewer.open,
+            on_message_action=self._on_message_action,
+            on_load_older=self._on_load_older,
+            on_file_download=self._on_file_download,
+        )
+        self.toast = Toast(placement="top-right", duration=3.0, top_offset="40px")
+        self.composer = Composer(actions, render, on_error=self._show_error)
 
         chat_title = Text("", size="16px", weight="600")
         chat_title.bind_text(state.active_chat_title)
@@ -92,6 +126,13 @@ class HomePage:
         sync_float = Div(styles=_SYNC_FLOAT, container=[sync_root])
         sync_float.bind_visible(state.sync_in_progress)
 
+        self._dragging_files = Signal(False)
+        drop_hint = Div(
+            styles=_DROP_HINT,
+            container=[Div(styles=_DROP_HINT_CARD, container=["松开以添加图片或文件"])],
+        )
+        drop_hint.bind_visible(self._dragging_files)
+
         right = Div(
             styles=_RIGHT,
             container=[chat_header, self.message_list.root, self.composer.root],
@@ -99,8 +140,12 @@ class HomePage:
         body = Div(styles=_BODY, container=[self.session_list.root, right])
         self.root = Div(
             styles=Styles(display="flex", flex_direction="column", width="100%", flex_grow="1", min_height="0"),
-            container=[body, sync_float, self.image_viewer.root],
+            container=[body, sync_float, self.image_viewer.root, self.toast.build(), drop_hint],
         )
+        self.root.bubble_events = True
+        self.root.on_dragover(self._on_dragover)
+        self.root.on_dragleave(self._on_dragleave)
+        self.root.on_drop(self._on_drop)
 
         self._apply_state()
         # 真实依赖 effect：这里读取 Signal，信号变化时自动调度增量刷新。
@@ -148,16 +193,88 @@ class HomePage:
             new_task.add_done_callback(self._state_refresh_done)
 
     async def _state_refresh_loop(self) -> None:
-        self._apply_state()
-        await self._render()
-        force_scroll = self._state_force_scroll
-        self._state_force_scroll = False
-        await self._actions.scroll_chat_to_bottom(force=force_scroll)
+        async with self._refresh_lock:
+            self._apply_state()
+            await self._render()
+        await self.message_list.scroll_to_bottom()
 
-    async def _refresh_async(self) -> None:
-        self._apply_state()
+    async def _refresh_async(self, force_scroll: bool = True) -> None:
+        async with self._refresh_lock:
+            self._apply_state()
+            await self._render()
+        if force_scroll:
+            await self.message_list.scroll_to_bottom(force=True)
+
+    async def _on_load_older(self) -> None:
+        try:
+            await self._actions.load_older_messages()
+        except Exception:
+            logger.exception("加载更早消息失败")
+            await self._show_error("加载更早消息失败")
+
+    async def _on_message_action(self, value: str, stored: StoredMessage) -> None:
+        try:
+            if value == "copy":
+                await self._actions.copy_text(stored.message.text)
+            elif value == "recall":
+                await self._actions.recall_message(stored.message.chat, stored.message.seq)
+            elif value == "download":
+                file = next((item for item in stored.message.elements if isinstance(item, FileElement)), None)
+                if file is not None:
+                    await self._on_file_download(file)
+        except Exception:
+            logger.exception(
+                "消息菜单动作失败: action=%s chat=%s seq=%s",
+                value,
+                stored.message.chat.key,
+                stored.message.seq,
+            )
+            await self._show_error("操作失败")
+
+    async def _on_dragover(self, _event: object) -> None:
+        if not self._dragging_files():
+            self._dragging_files.set(True)
+            await self._render()
+
+    async def _on_dragleave(self, _event: object) -> None:
+        if self._dragging_files():
+            self._dragging_files.set(False)
+            await self._render()
+
+    async def _on_drop(self, event: object) -> None:
+        self._dragging_files.set(False)
+        drop_files = getattr(event, "drop_files", None) or []
+        paths = [str(file.get("path") or "") for file in drop_files if file.get("path")]
+        if paths:
+            await self._handle_dropped_paths(paths)
         await self._render()
-        await self._actions.scroll_chat_to_bottom(force=True)
+
+    async def _handle_dropped_paths(self, paths: list[str]) -> None:
+        images = [path for path in paths if self._actions.is_image_path(path)]
+        files = [path for path in paths if not self._actions.is_image_path(path)]
+        if images:
+            self.composer.stage_images(images)
+            await self._refresh_async(force_scroll=False)
+        if files:
+            try:
+                await self._actions.send_files(files)
+            except Exception:
+                logger.exception("拖拽文件发送失败")
+                await self._show_error("拖拽文件发送失败")
+
+    async def _on_file_download(self, file: FileElement) -> None:
+        try:
+            destination = await self._actions.download_file(file)
+            if destination:
+                self.toast.show(f"已保存到 {destination}", type="success")
+                await self._render()
+        except Exception as exc:
+            logger.exception("文件下载失败: name=%s", file.file_name)
+            await self._show_error(f"下载失败：{exc}")
+
+    async def _show_error(self, message: str) -> None:
+        self.toast.show(message, type="error")
+        await self._render()
 
     # ---- 标题栏动作入口 ----
 
@@ -191,5 +308,3 @@ class HomePage:
 
     async def _open_and_refresh(self, chat: ChatTarget) -> None:
         await self._actions.open_chat(chat)
-        await self._refresh_async()
-        await self._actions.scroll_chat_to_bottom()

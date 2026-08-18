@@ -51,7 +51,13 @@ class AtAllElement(BaseModel):
 
 
 class ImageElement(BaseModel):
-    """图片消息元素，url 为 lagrange 解码时解析出的预览地址。"""
+    """图片消息元素。
+
+    ``url`` 为 lagrange 解码时解析出的预览地址；``cached_path`` 是接收
+    消息下载到本地后的缓存路径，发送成功后会短暂指向本地原图以便立即
+    渲染；``local_path`` 仅用于发送：指向待上传的本地图片，发送成功后
+    会被替换为协议返回的图片信息，不会持久化。
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -65,6 +71,7 @@ class ImageElement(BaseModel):
     is_emoji: bool = False
     display_name: str = ""
     cached_path: str = ""
+    local_path: str = ""
 
     @property
     def preview_text(self) -> str:

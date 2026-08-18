@@ -79,6 +79,36 @@ def group_message_to_domain(event: GroupMessage, self_uin: int) -> Message:
     )
 
 
+def lagrange_image_to_domain(element: lagrange_elems.Image) -> ImageElement:
+    """把 lagrange 图片元素转换为领域模型。
+
+    接收解析和发送上传共用同一映射，保证两种来源的字段完全一致。
+    """
+    return ImageElement(
+        url=element.url,
+        name=element.name,
+        size=element.size,
+        md5=element.md5,
+        width=element.width,
+        height=element.height,
+        is_emoji=element.is_emoji,
+        display_name=element.display_name,
+    )
+
+
+def lagrange_file_to_domain(element: lagrange_elems.File) -> FileElement:
+    """把 lagrange 文件元素转换为领域模型。"""
+    return FileElement(
+        file_name=element.file_name,
+        file_size=element.file_size,
+        file_url=element.file_url,
+        file_id=element.file_id,
+        file_uuid=element.file_uuid,
+        file_hash=element.file_hash,
+        md5=element.file_md5,
+    )
+
+
 def _convert_elements(msg_chain: list[Any]) -> list[MessageElement]:
     """把 lagrange 元素精确映射为领域元素。
 
@@ -94,18 +124,7 @@ def _convert_elements(msg_chain: list[Any]) -> list[MessageElement]:
         elif isinstance(element, lagrange_elems.AtAll):
             elements.append(AtAllElement(text=element.text))
         elif isinstance(element, lagrange_elems.Image):
-            elements.append(
-                ImageElement(
-                    url=element.url,
-                    name=element.name,
-                    size=element.size,
-                    md5=element.md5,
-                    width=element.width,
-                    height=element.height,
-                    is_emoji=element.is_emoji,
-                    display_name=element.display_name,
-                )
-            )
+            elements.append(lagrange_image_to_domain(element))
         elif isinstance(element, lagrange_elems.Emoji):
             # Reaction 是 Emoji 的子类，当前只保存表情 id，已足够展示占位。
             elements.append(EmojiElement(id=element.id))
@@ -144,17 +163,7 @@ def _convert_elements(msg_chain: list[Any]) -> list[MessageElement]:
                 )
             )
         elif isinstance(element, lagrange_elems.File):
-            elements.append(
-                FileElement(
-                    file_name=element.file_name,
-                    file_size=element.file_size,
-                    file_url=element.file_url,
-                    file_id=element.file_id,
-                    file_uuid=element.file_uuid,
-                    file_hash=element.file_hash,
-                    md5=element.file_md5,
-                )
-            )
+            elements.append(lagrange_file_to_domain(element))
         elif isinstance(element, lagrange_elems.Poke):
             elements.append(PokeElement(id=element.id))
         elif isinstance(element, lagrange_elems.Quote):

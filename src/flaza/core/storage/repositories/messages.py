@@ -70,6 +70,21 @@ class MessageRepository:
         """返回指定本地 id 之前的更早消息，按时间正序。"""
         return await self._list_latest(chat, limit, before_id=before_id)
 
+    async def has_before(self, chat: ChatTarget, before_id: int) -> bool:
+        """返回指定本地 id 之前是否还有更早消息。"""
+        chat_kind, chat_id = _chat_columns(chat)
+        cursor = await self._db.execute(
+            """
+            SELECT EXISTS(
+                SELECT 1 FROM messages
+                WHERE chat_kind = ? AND chat_id = ? AND id < ?
+            ) AS has_before
+            """,
+            (chat_kind, chat_id, before_id),
+        )
+        row = await cursor.fetchone()
+        return row is not None and bool(row["has_before"])
+
     async def list_after(self, chat: ChatTarget, after_id: int, limit: int = 100) -> list[StoredMessage]:
         """返回指定本地 id 之后的消息，按时间正序。"""
         chat_kind, chat_id = _chat_columns(chat)

@@ -8,6 +8,7 @@ from typing import override
 from flaza.core.events import EventBus, MessageMediaCached
 from flaza.core.models import (
     ChatTarget,
+    FileElement,
     Friend,
     FriendChat,
     Group,
@@ -32,6 +33,9 @@ class FakeQQ:
     def __init__(self) -> None:
         self.missing_by_chat: dict[str, list[Message]] = {}
         self.calls: list[tuple[ChatTarget, int, int]] = []
+        self.sent_elements: list[Sequence[MessageElement]] = []
+        self.sent_files: list[tuple[str, str | None]] = []
+        self.recalled: list[tuple[ChatTarget, int]] = []
 
     async def start(self) -> None: ...
 
@@ -67,6 +71,7 @@ class FakeQQ:
         raise NotImplementedError
 
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
+        self.sent_elements.append(elements)
         return Message(
             chat=target,
             sender_uin=10001,
@@ -77,6 +82,22 @@ class FakeQQ:
             elements=list(elements),
             from_self=True,
         )
+
+    async def send_file(self, target: ChatTarget, path: str, filename: str | None = None) -> Message:
+        self.sent_files.append((path, filename))
+        return Message(
+            chat=target,
+            sender_uin=10001,
+            sender_uid="u_self",
+            sender_name="我",
+            seq=2,
+            timestamp=1700000000,
+            elements=[FileElement(file_name=filename or Path(path).name, file_size=1)],
+            from_self=True,
+        )
+
+    async def recall_message(self, target: ChatTarget, seq: int) -> None:
+        self.recalled.append((target, seq))
 
     async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
         self.calls.append((chat, after_seq, limit))
@@ -165,6 +186,76 @@ def test_send_message_marks_session_read(tmp_path: Path) -> None:
         assert len(recent) == 1
         assert await storage.sessions.unread_count(chat) == 0
 
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_send_image_passes_local_path_element(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+        qq = FakeQQ()
+        service = MessageService(qq, storage, EventBus())
+
+        chat = FriendChat(uid="u_1", uin=10002)
+        await service.send_image(chat, "/tmp/pic.png")
+
+        assert len(qq.sent_elements) == 1
+        element = qq.sent_elements[0][0]
+        assert isinstance(element, ImageElement)
+        assert element.local_path == "/tmp/pic.png"
+
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_send_file_persists_file_element(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+        qq = FakeQQ()
+        service = MessageService(qq, storage, EventBus())
+
+        chat = FriendChat(uid="u_1", uin=10002)
+        await service.send_file(chat, "/tmp/资料.zip", "资料.zip")
+
+        assert qq.sent_files == [("/tmp/资料.zip", "资料.zip")]
+        recent = await storage.messages.list_recent(chat)
+        assert len(recent) == 1
+        element = recent[0].message.elements[0]
+        assert isinstance(element, FileElement)
+        assert element.file_name == "资料.zip"
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_recall_message_marks_storage_and_calls_qq(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+        chat = FriendChat(uid="u_1", uin=10002)
+        await storage.messages.insert(
+            Message(
+                chat=chat,
+                sender_uin=10001,
+                sender_uid="u_self",
+                seq=10,
+                timestamp=100,
+                elements=[],
+                from_self=True,
+            )
+        )
+
+        qq = FakeQQ()
+        service = MessageService(qq, storage, EventBus())
+        await service.recall_message(chat, 10)
+
+        assert qq.recalled == [(chat, 10)]
+        recent = await storage.messages.list_recent(chat)
+        assert recent[0].message.recalled is True
         await storage.close()
 
     asyncio.run(scenario())

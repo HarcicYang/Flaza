@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from neony.application.elements import Avatar, Badge, MessageBubble, NoticeBubble
+from neony.application.elements import Avatar, Badge, MessageBubble, NoticeBubble, StickToBottom
 from neony.application.theme import stub
-from neony.dom import Div, DOMElement, Span, Styles
+from neony.dom import DOMElement, DomEvent, Span, Styles
 
-from flaza.core.models import ChatTarget, GroupChat, GroupMemberRole, Message, StoredMessage
+from flaza.core.models import ChatTarget, FileElement, GroupChat, GroupMemberRole, Message, StoredMessage
 from flaza.ui.avatars import friend_avatar_url
 from flaza.ui.components.image_viewer import ImagePreview
 from flaza.ui.components.message_content import build_message_content
@@ -42,25 +43,29 @@ class MessageList:
         self,
         state: UiStateStore,
         on_image_click: Callable[[ImagePreview], Awaitable[None]] | None = None,
+        on_message_action: Callable[[str, StoredMessage], Awaitable[None]] | None = None,
+        on_load_older: Callable[[], Awaitable[None]] | None = None,
+        on_file_download: Callable[[FileElement], Awaitable[None]] | None = None,
     ) -> None:
         self._state = state
         self._on_image_click = on_image_click
+        self._on_message_action = on_message_action
+        self._on_file_download = on_file_download
+        self._loading_older = False
         self._items: dict[str, _RenderedItem] = {}
         self._ordered_keys: list[str] = []
         self._chat_key: str | None = None
         self._placeholder: DOMElement | None = None
-        self.root = Div(
-            key="message-list",
-            styles=Styles(
-                flex_grow="1",
-                min_height="0",
-                overflow_y="auto",
-                padding="16px",
-                display="flex",
-                flex_direction="column",
-                gap="10px",
-            ),
-        )
+        self._stick = StickToBottom()
+        self.root = self._stick.build()
+        self.root.key = "message-list"
+        self.root.styles.display = "flex"
+        self.root.styles.flex_direction = "column"
+        self.root.styles.gap = "10px"
+        self.root.styles.padding = "16px"
+        self.root.bubble_events = True
+        if on_load_older is not None:
+            self.root.on_scroll(self._make_scroll_handler(on_load_older))
 
     def set_messages(
         self,
@@ -95,8 +100,18 @@ class MessageList:
             self._update_existing(timeline, chat)
             return
 
+        # 加载更早消息：更早的 key 全部位于已有列表之前。
+        # 只在 DOM 头部增量插入新节点，避免全量重建造成滚动跳动。
+        if len(desired_keys) > len(old_keys) and desired_keys[len(desired_keys) - len(old_keys) :] == old_keys:
+            prefix_keys = desired_keys[: len(desired_keys) - len(old_keys)]
+            for index, key in enumerate(prefix_keys):
+                self._prepend_item(index, key, item_by_key[key], chat)
+            self._update_existing(timeline, chat)
+            return
+
         # list_recent 到达 50 条上限后，最旧一条被挤出、最新一条追加。
-        if len(desired_keys) == len(old_keys) and desired_keys[:-1] == old_keys[1:]:
+        # 至少保留一个共享元素才构成“平移”，否则退化为整体替换。
+        if len(desired_keys) == len(old_keys) and len(old_keys) >= 2 and desired_keys[:-1] == old_keys[1:]:
             self._remove_first()
             self._append_item(desired_keys[-1], item_by_key[desired_keys[-1]], chat)
             self._update_existing(timeline, chat)
@@ -161,7 +176,15 @@ class MessageList:
         )
         self.root.container.append(self._placeholder)
 
+    def _remove_placeholder(self) -> None:
+        if self._placeholder is None:
+            return
+        with contextlib.suppress(ValueError):
+            self.root.container.remove(self._placeholder)
+        self._placeholder = None
+
     def _append_item(self, key: str, item: StoredMessage | ChatNotice, chat: ChatTarget) -> None:
+        self._remove_placeholder()
         element, kind, message, role, avatar_src = self._build_item(item, chat)
         self.root.container.append(element)
         self._items[key] = _RenderedItem(
@@ -173,6 +196,20 @@ class MessageList:
             avatar_src=avatar_src,
         )
         self._ordered_keys.append(key)
+
+    def _prepend_item(self, index: int, key: str, item: StoredMessage | ChatNotice, chat: ChatTarget) -> None:
+        self._remove_placeholder()
+        element, kind, message, role, avatar_src = self._build_item(item, chat)
+        self.root.container.insert(index, element)
+        self._ordered_keys.insert(index, key)
+        self._items[key] = _RenderedItem(
+            key=key,
+            element=element,
+            kind=kind,
+            message=message,
+            role=role,
+            avatar_src=avatar_src,
+        )
 
     def _remove_first(self) -> None:
         if not self._ordered_keys:
@@ -265,20 +302,55 @@ class MessageList:
             )
 
         role = self._resolve_role(chat, message)
+        menu_items: list[tuple[str, str]] = []
+        if message.text:
+            menu_items.append(("copy", "复制文本"))
+        if any(isinstance(item, FileElement) for item in message.elements):
+            menu_items.append(("download", "下载文件"))
+        if message.from_self:
+            menu_items.append(("recall", "撤回"))
         bubble = MessageBubble(
             text=message.text,
-            content=build_message_content(message, self._on_image_click),
+            content=build_message_content(message, self._on_image_click, self._on_file_download),
             from_me=message.from_self,
             name=message.sender_name if isinstance(chat, GroupChat) and not message.from_self else None,
             avatar=avatar,
-            menu_items=[],
+            menu_items=menu_items,
         )
+        if self._on_message_action is not None:
+            stored = item
+            bubble.on_change(self._make_message_action_handler(stored))
         bubble._bubble.styles = bubble._bubble.styles.model_copy(update={"white_space": "pre-wrap"})
         if isinstance(chat, GroupChat) and not message.from_self and role is not GroupMemberRole.MEMBER:
             _MessageListHelpers._append_role_badge(bubble, role)
         element = bubble.build()
         element.key = f"message:{item.id}"
         return element, "message", message, role, avatar_src
+
+    def _make_message_action_handler(self, stored: StoredMessage):
+        async def handler(event: DomEvent) -> None:
+            if self._on_message_action is not None:
+                await self._on_message_action(str(event.value), stored)
+
+        return handler
+
+    async def scroll_to_bottom(self, *, force: bool = False) -> None:
+        """滚动到底部；``force=True`` 忽略贴底状态强制滚动。"""
+        await self._stick.scroll_to_bottom(force=force)
+
+    def _make_scroll_handler(self, callback: Callable[[], Awaitable[None]]):
+        async def handler(event: DomEvent) -> None:
+            if self._loading_older or not self._state.has_older_messages():
+                return
+            if event.scroll_top is not None and event.scroll_top > 24:
+                return
+            self._loading_older = True
+            try:
+                await callback()
+            finally:
+                self._loading_older = False
+
+        return handler
 
     def _resolve_role(self, chat: ChatTarget, message: Message) -> GroupMemberRole:
         if not isinstance(chat, GroupChat) or message.from_self:

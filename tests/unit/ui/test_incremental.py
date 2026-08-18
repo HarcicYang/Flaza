@@ -1,13 +1,15 @@
 """会话列表与消息流的增量更新测试。"""
 
-from neony.dom import DOMElement
+import asyncio
+
+from neony.dom import DOMElement, DomEvent
 
 from flaza.config import AppConfig
 from flaza.core.models import FriendChat, Message, Session, StoredMessage, TextElement
 from flaza.runtime import ApplicationRuntime
 from flaza.ui.components.message_list import MessageList
 from flaza.ui.components.session_list import SessionList
-from flaza.ui.state import UiStateStore
+from flaza.ui.state import ChatNotice, UiStateStore
 
 
 def _runtime_state() -> tuple[ApplicationRuntime, UiStateStore]:
@@ -95,6 +97,73 @@ def test_message_list_appends_new_message_without_rebuilding() -> None:
     assert len(messages.root.container) == 3
     assert messages.root.container[0] is old_els[0]
     assert messages.root.container[1] is old_els[1]
+
+
+def test_message_list_prepends_older_messages_without_rebuilding() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    chat = FriendChat(uid="u_1", uin=10001)
+    current = (_message(chat, 2, "二", 2), _message(chat, 3, "三", 3))
+    messages.set_messages(chat, current)
+    old_els = [messages.root.container[0], messages.root.container[1]]
+
+    combined = (_message(chat, 1, "一", 1), *current)
+    messages.set_messages(chat, combined)
+    assert len(messages.root.container) == 3
+    assert messages.root.container[1] is old_els[0]
+    assert messages.root.container[2] is old_els[1]
+
+
+def test_message_list_removes_placeholder_when_first_item_arrives() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    chat = FriendChat(uid="u_1", uin=10001)
+
+    messages.set_messages(chat, (), ())
+    first = messages.root.container[0]
+    assert isinstance(first, DOMElement)
+    assert first.key == "message-list-placeholder"
+
+    notice = (ChatNotice(chat_key=chat.key, text="有成员加入群聊", timestamp=1, key="n1"),)
+    messages.set_messages(chat, (), notice)
+    keys = [child.key for child in messages.root.container if hasattr(child, "key")]
+    assert keys == ["notice:n1"]
+    assert messages._ordered_keys == ["notice:n1"]
+
+    messages.set_messages(chat, (_message(chat, 1, "一", 1),), ())
+    keys = [child.key for child in messages.root.container if hasattr(child, "key")]
+    assert keys == ["message:1"]
+    assert messages._ordered_keys == ["message:1"]
+
+
+def test_message_list_scroll_top_triggers_older_load_once() -> None:
+    _runtime, state = _runtime_state()
+    state.has_older_messages.set(True)
+    messages = MessageList(state)
+
+    calls = 0
+
+    async def load_older() -> None:
+        nonlocal calls
+        calls += 1
+
+    handler = messages._make_scroll_handler(load_older)
+    event = DomEvent(key="message-list", type="scroll", scroll_top=0)
+    asyncio.run(handler(event))
+    assert calls == 1
+
+
+def test_message_list_scroll_top_ignores_when_no_older() -> None:
+    _runtime, state = _runtime_state()
+    state.has_older_messages.set(False)
+    messages = MessageList(state)
+
+    async def load_older() -> None:
+        raise AssertionError("不应触发历史加载")
+
+    handler = messages._make_scroll_handler(load_older)
+    event = DomEvent(key="message-list", type="scroll", scroll_top=0)
+    asyncio.run(handler(event))
 
 
 def test_message_list_shift_keeps_shared_rows() -> None:

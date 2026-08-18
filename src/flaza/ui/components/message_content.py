@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from pathlib import Path
 
+from neony.application.elements import Button
 from neony.application.theme import stub
 from neony.application.urls import data_url, file_url
 from neony.dom import Anchor, Audio, Border, Color, Div, DOMElement, DomEvent, Img, Span, Styles, Video
@@ -31,6 +32,7 @@ from flaza.core.models import (
 from flaza.ui.components.image_viewer import ImagePreview
 
 ImageClickHandler = Callable[[ImagePreview], Awaitable[None]]
+FileDownloadHandler = Callable[[FileElement], Awaitable[None]]
 
 _INLINE_ELEMENT_TYPES = (TextElement, AtElement, AtAllElement)
 
@@ -110,10 +112,25 @@ _LINK = Styles(
     text_decoration="none",
 )
 
+_FILE_DOWNLOAD_BUTTON = Styles(
+    display="inline-flex",
+    align_items="center",
+    justify_content="center",
+    padding="3px 8px",
+    border="none",
+    border_radius="6px",
+    background_color=Color(name="transparent"),
+    color=Color(name="currentColor"),
+    font_size="12px",
+    cursor="pointer",
+    opacity="0.85",
+)
+
 
 def build_message_content(
     message: Message,
     on_image_click: ImageClickHandler | None = None,
+    on_file_download: FileDownloadHandler | None = None,
 ) -> DOMElement:
     """把消息元素渲染为 MessageBubble 的 content。
 
@@ -127,11 +144,11 @@ def build_message_content(
         if isinstance(element, _INLINE_ELEMENT_TYPES):
             inline: list[DOMElement] = []
             while index < len(elements) and isinstance(elements[index], _INLINE_ELEMENT_TYPES):
-                inline.append(_build_element(elements[index], message.from_self, on_image_click))
+                inline.append(_build_element(elements[index], message.from_self, on_image_click, on_file_download))
                 index += 1
             children.append(Span(styles=_INLINE_GROUP, container=inline))
         else:
-            children.append(_build_element(element, message.from_self, on_image_click))
+            children.append(_build_element(element, message.from_self, on_image_click, on_file_download))
             index += 1
     return Div(styles=_CONTENT, container=children)
 
@@ -140,6 +157,7 @@ def _build_element(
     element: MessageElement,
     from_self: bool,
     on_image_click: ImageClickHandler | None,
+    on_file_download: FileDownloadHandler | None,
 ) -> DOMElement:
     if isinstance(element, TextElement):
         return Span(container=[element.text], styles=_TEXT)
@@ -191,20 +209,32 @@ def _build_element(
         return _card("视频", _format_duration(element.time))
 
     if isinstance(element, FileElement):
+        parts: list[DOMElement] = []
         href = _local_or_remote_url(element.file_url or "", element.cached_path)
         if href:
-            anchor = Anchor(
-                href=href,
-                target="_blank",
-                rel="noopener noreferrer",
-                download=element.file_name,
-                styles=_LINK,
-                container=[
-                    Span(container=[element.file_name], styles=_CARD_TITLE),
-                    Span(container=[_format_size(element.file_size)], styles=_CARD_SUBTITLE),
-                ],
+            parts.append(
+                Anchor(
+                    href=href,
+                    target="_blank",
+                    rel="noopener noreferrer",
+                    download=element.file_name,
+                    styles=_LINK,
+                    container=[
+                        Span(container=[element.file_name], styles=_CARD_TITLE),
+                        Span(container=[_format_size(element.file_size)], styles=_CARD_SUBTITLE),
+                    ],
+                )
             )
-            return Div(styles=_CARD, container=[anchor])
+        if on_file_download is not None:
+            button = Button("下载", variant="ghost").reset_styles(_FILE_DOWNLOAD_BUTTON)
+
+            async def download(_event: DomEvent) -> None:
+                await on_file_download(element)
+
+            button.on_click(download)
+            parts.append(button.build())
+        if parts:
+            return Div(styles=_CARD, container=parts)
         detail = element.file_name
         size_text = _format_size(element.file_size)
         if size_text:

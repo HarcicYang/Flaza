@@ -66,6 +66,12 @@ class FakeQQ:
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         raise NotImplementedError
 
+    async def send_file(self, target: ChatTarget, path: str, filename: str | None = None) -> Message:
+        raise NotImplementedError
+
+    async def recall_message(self, target: ChatTarget, seq: int) -> None:
+        raise NotImplementedError
+
     async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
         raise NotImplementedError
 
