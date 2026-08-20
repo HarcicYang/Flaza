@@ -35,6 +35,7 @@ class _RenderedItem:
     message: Message | None
     role: GroupMemberRole
     avatar_src: str | None
+    bubble: MessageBubble | None = None
 
 
 class MessageList:
@@ -149,7 +150,7 @@ class MessageList:
 
         for item in timeline:
             key = self._item_key(item)
-            element, kind, message, role, avatar_src = self._build_item(item, chat)
+            element, kind, message, role, avatar_src, bubble = self._build_item(item, chat)
             self.root.container.append(element)
             self._items[key] = _RenderedItem(
                 key=key,
@@ -158,6 +159,7 @@ class MessageList:
                 message=message,
                 role=role,
                 avatar_src=avatar_src,
+                bubble=bubble,
             )
             self._ordered_keys.append(key)
 
@@ -188,7 +190,7 @@ class MessageList:
 
     def _append_item(self, key: str, item: StoredMessage | ChatNotice, chat: ChatTarget) -> None:
         self._remove_placeholder()
-        element, kind, message, role, avatar_src = self._build_item(item, chat)
+        element, kind, message, role, avatar_src, bubble = self._build_item(item, chat)
         self.root.container.append(element)
         self._items[key] = _RenderedItem(
             key=key,
@@ -197,12 +199,13 @@ class MessageList:
             message=message,
             role=role,
             avatar_src=avatar_src,
+            bubble=bubble,
         )
         self._ordered_keys.append(key)
 
     def _prepend_item(self, index: int, key: str, item: StoredMessage | ChatNotice, chat: ChatTarget) -> None:
         self._remove_placeholder()
-        element, kind, message, role, avatar_src = self._build_item(item, chat)
+        element, kind, message, role, avatar_src, bubble = self._build_item(item, chat)
         self.root.container.insert(index, element)
         self._ordered_keys.insert(index, key)
         self._items[key] = _RenderedItem(
@@ -212,6 +215,7 @@ class MessageList:
             message=message,
             role=role,
             avatar_src=avatar_src,
+            bubble=bubble,
         )
 
     def _remove_first(self) -> None:
@@ -244,8 +248,33 @@ class MessageList:
                 and entry.avatar_src == desired_avatar
             ):
                 continue
+            # 仅 reactions 变化时只重建内容元素，保留气泡根节点的事件处理器
+            if (
+                entry.kind == "message"
+                and entry.message is not None
+                and entry.role == desired_role
+                and entry.avatar_src == desired_avatar
+                and entry.message.model_copy(update={"reactions": message.reactions}) == message
+            ):
+                entry.message = message
+                if entry.bubble is not None:
+                    self_info = self._state.self_info()
+                    self_uid = self_info.uid if self_info else None
+                    on_reaction_click = self._make_reaction_pill_handler(stored, self_uid)
+                    new_content = build_message_content(
+                        message,
+                        self._on_image_click,
+                        self._on_file_download,
+                        on_reaction_click=on_reaction_click,
+                        self_uid=self_uid,
+                    )
+                    entry.bubble._bubble.container = [new_content]
+                continue
             # 撤回、身份变化、头像变化：原地替换该元素。
-            element, kind, new_message, role, avatar_src = self._build_item(stored, chat)
+            old_bubble = entry.bubble
+            element, kind, new_message, role, avatar_src, bubble = self._build_item(stored, chat)
+            if old_bubble is not None and bubble is not None and old_bubble._actions_shown:  # type: ignore[attr-defined]
+                bubble._set_actions_visible(True)  # type: ignore[attr-defined]
             self._replace_element(key, element)
             self._items[key] = _RenderedItem(
                 key=key,
@@ -254,6 +283,7 @@ class MessageList:
                 message=new_message,
                 role=role,
                 avatar_src=avatar_src,
+                bubble=bubble,
             )
 
     def _replace_element(self, key: str, element: DOMElement) -> None:
@@ -277,17 +307,24 @@ class MessageList:
         self,
         item: StoredMessage | ChatNotice,
         chat: ChatTarget,
-    ) -> tuple[DOMElement, Literal["message", "recalled", "notice"], Message | None, GroupMemberRole, str | None]:
+    ) -> tuple[
+        DOMElement,
+        Literal["message", "recalled", "notice"],
+        Message | None,
+        GroupMemberRole,
+        str | None,
+        MessageBubble | None,
+    ]:
         if isinstance(item, ChatNotice):
             element = NoticeBubble(item.text).build()
             element.key = f"notice:{item.key}"
-            return element, "notice", None, GroupMemberRole.MEMBER, None
+            return element, "notice", None, GroupMemberRole.MEMBER, None, None
 
         message = item.message
         if message.recalled:
             element = NoticeBubble("撤回了一条消息").build()
             element.key = f"message:{item.id}"
-            return element, "recalled", message, GroupMemberRole.MEMBER, None
+            return element, "recalled", message, GroupMemberRole.MEMBER, None, None
 
         avatar_src = self._avatar_src(message)
         if message.from_self:
@@ -342,7 +379,7 @@ class MessageList:
             _MessageListHelpers._append_role_badge(bubble, role)
         element = bubble.build()
         element.key = f"message:{item.id}"
-        return element, "message", message, role, avatar_src
+        return element, "message", message, role, avatar_src, bubble
 
     def _make_message_action_handler(self, stored: StoredMessage):
         async def handler(event: DomEvent) -> None:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import asyncio
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
+from typing import Any
 
 from neony.application.elements import Button
 from neony.application.theme import stub
@@ -54,6 +56,8 @@ _STAGE = Styles(
     overflow="hidden",
     cursor="grab",
     z_index="1",
+    user_select="none",
+    touch_action="none",
 )
 
 _STAGE_ACTUAL = _STAGE.model_copy(
@@ -97,8 +101,11 @@ class ImagePreview:
 class ImageViewer:
     """全屏图片预览：滚轮缩放、按钮缩放、双击切换、Esc / 空白关闭。"""
 
-    def __init__(self, render: Callable[[], Awaitable[None]]) -> None:
+    def __init__(
+        self, render: Callable[[], Awaitable[None]], eval_js: Callable[[str], Coroutine[Any, Any, str]] | None = None
+    ) -> None:
         self._render = render
+        self._eval_js = eval_js
         self._scale = 1.0
         self._fit = True
         self._preview: ImagePreview | None = None
@@ -107,9 +114,13 @@ class ImageViewer:
         self._dragging = False
         self._last_x: float | None = None
         self._last_y: float | None = None
+        self._is_open = False
+        self._drag_transform: str | None = None
+        self._drag_sync_task: asyncio.Task[None] | None = None
 
-        self._image = Img(alt="")
+        self._image = Img(alt="", args={"draggable": "false"})
         self._stage = Div(styles=_STAGE, container=[self._image])
+        self._stage.on_mousedown(self._on_mousedown)
         self._stage.on_wheel(self._on_wheel)
         self._stage.bubble_events = True
 
@@ -140,9 +151,15 @@ class ImageViewer:
         self.root.on_mouseup(self._on_mouseup)
         self.root.bubble_events = True
 
-        self._stage.on_mousedown(self._on_mousedown)
+        # 拖拽事件由 on_mousedown/on_pointermove/on_mouseup 处理
+        # CSS transform 通过 eval_js 直接更新以绕过 Neony 渲染管线
+
+    @property
+    def is_open(self) -> bool:
+        return self._is_open
 
     async def open(self, preview: ImagePreview) -> None:
+        self._is_open = True
         self._preview = preview
         self._image.src = preview.src
         self._image.alt = preview.alt or "图片预览"
@@ -156,6 +173,7 @@ class ImageViewer:
         await self._render()
 
     async def close(self) -> None:
+        self._is_open = False
         self.root.styles = _OVERLAY.model_copy(update={"display": "none"})
         await self._render()
 
@@ -169,20 +187,8 @@ class ImageViewer:
     async def _on_wheel(self, event: DomEvent) -> None:
         if event.delta_y is None and event.delta_x is None:
             return
-        if event.ctrl_key:
-            factor = 1.12 if (event.delta_y or 0) < 0 else 1 / 1.12
-            await self._set_scale(self._scale * factor)
-            return
-
-        if self._fit and abs(self._scale - 1.0) < 0.01:
-            return
-
-        delta_x = _wheel_delta(event.delta_x, event.delta_mode)
-        delta_y = _wheel_delta(event.delta_y, event.delta_mode)
-        self._offset_x -= delta_x
-        self._offset_y -= delta_y
-        self._sync_image_styles()
-        await self._render()
+        factor = 1.12 if (event.delta_y or 0) < 0 else 1 / 1.12
+        await self._set_scale(self._scale * factor)
 
     async def _on_zoom_in(self, _event: DomEvent) -> None:
         await self._set_scale(self._scale * 1.25)
@@ -205,6 +211,7 @@ class ImageViewer:
         self._last_x = event.x
         self._last_y = event.y
         self._stage.styles = self._stage.styles.model_copy(update={"cursor": "grabbing"})
+        await self._render()
 
     async def _on_pointermove(self, event: DomEvent) -> None:
         if not self._dragging:
@@ -226,14 +233,35 @@ class ImageViewer:
         if event.y is not None:
             self._last_y = event.y
         self._sync_image_styles()
-        await self._render()
+        if self._eval_js is not None:
+            self._drag_transform = f"translate({self._offset_x}px, {self._offset_y}px) scale({self._scale})"
+            if self._drag_sync_task is None or self._drag_sync_task.done():
+                self._drag_sync_task = asyncio.create_task(self._flush_drag_transform())
+        else:
+            await self._render()
+
+    async def _flush_drag_transform(self) -> None:
+        """顺序应用拖拽过程中的最新 transform，避免异步 JS 调用乱序回弹。"""
+        while self._drag_transform is not None:
+            transform = self._drag_transform
+            self._drag_transform = None
+            if self._eval_js is None:
+                return
+            key = self._image.key
+            await self._eval_js(
+                f"const el = document.querySelector('[data-neony-key=\"{key}\"]');"
+                f"if (el) el.style.transform = '{transform}'"
+            )
 
     async def _on_mouseup(self, _event: DomEvent) -> None:
         self._dragging = False
         self._last_x = None
         self._last_y = None
+        if self._drag_sync_task is not None:
+            await self._drag_sync_task
         if self.root.styles.display != "none":
             self._stage.styles = self._stage.styles.model_copy(update={"cursor": "grab"})
+        await self._render()
 
     async def _on_double_click(self, _event: DomEvent) -> None:
         if self._fit:
@@ -282,11 +310,3 @@ class ImageViewer:
             )
         transform = f"translate({self._offset_x}px, {self._offset_y}px) scale({self._scale})"
         self._image.styles = styles.model_copy(update={"transform": transform})
-
-
-def _wheel_delta(value: float | None, delta_mode: int | None) -> float:
-    if value is None:
-        return 0.0
-    if delta_mode == 1:
-        return value * 16.0
-    return value

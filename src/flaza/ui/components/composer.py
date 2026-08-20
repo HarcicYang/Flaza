@@ -364,6 +364,11 @@ class Composer:
 
         full_text = _segments_to_text(self._editor.content())
         caret = self._editor.caret_position()
+
+        # 同步 picker 状态：被外部点击关闭后重置标志，允许下次 @ 重新打开
+        if self._at_active and not self._at_picker.is_open:
+            self._at_active = False
+
         if not self._at_active:
             if caret > 0 and caret <= len(full_text) and full_text[caret - 1] == "@":
                 self._at_active = True

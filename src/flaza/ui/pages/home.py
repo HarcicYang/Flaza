@@ -106,7 +106,7 @@ class HomePage:
         actions.set_chat_view_refresher(self._refresh_async)
 
         self.session_list = SessionList(state, actions, self._on_session_selected)
-        self.image_viewer = ImageViewer(render)
+        self.image_viewer = ImageViewer(render, eval_js=actions._runtime.eval_js)
         self.message_list = MessageList(
             state,
             on_image_click=self.image_viewer.open,
@@ -251,20 +251,25 @@ class HomePage:
         except Exception as exc:
             logger.exception("发送表情回应失败")
             await self._show_error(f"表情回应失败：{exc}")
-        await self._render()
 
     async def _on_dragover(self, _event: object) -> None:
+        if self.image_viewer.is_open:
+            return
         if not self._dragging_files():
             self._dragging_files.set(True)
             await self._render()
 
     async def _on_dragleave(self, _event: object) -> None:
+        if self.image_viewer.is_open:
+            return
         if self._dragging_files():
             self._dragging_files.set(False)
             await self._render()
 
     async def _on_drop(self, event: object) -> None:
         self._dragging_files.set(False)
+        if self.image_viewer.is_open:
+            return
         drop_files = getattr(event, "drop_files", None) or []
         paths = [str(file.get("path") or "") for file in drop_files if file.get("path")]
         if paths:

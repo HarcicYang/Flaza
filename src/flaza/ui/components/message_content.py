@@ -156,7 +156,7 @@ _REACTION_EMOJI = Styles(
 
 _REACTION_COUNT = Styles(
     font_size="11px",
-    color=stub.text_secondary,
+    color=stub.text_primary,
     line_height="1",
     margin_left="1px",
 )

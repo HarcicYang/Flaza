@@ -79,16 +79,17 @@ def test_viewer_ctrl_wheel_zooms_and_escape_closes() -> None:
     asyncio.run(scenario())
 
 
-def test_viewer_plain_wheel_pans_instead_of_zooming() -> None:
+def test_viewer_plain_wheel_zooms() -> None:
     async def scenario() -> None:
         viewer = _viewer([])
         await viewer.open(ImagePreview(src="https://example.com/pic.png", width=640, height=480))
-        await viewer._show_actual_size()
 
         scale_before = viewer._scale
         await viewer._on_wheel(DomEvent(key="stage", type="wheel", source="user", delta_y=120))
+        assert viewer._scale < scale_before
+
+        await viewer._on_wheel(DomEvent(key="stage", type="wheel", source="user", delta_y=-120))
         assert viewer._scale == scale_before
-        assert viewer._offset_y < 0
 
     asyncio.run(scenario())
 
