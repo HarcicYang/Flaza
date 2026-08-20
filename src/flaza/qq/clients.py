@@ -67,13 +67,13 @@ _QR_STATE_MAP = {
 class LagrangeQQClient:
     """协议端口 QQClient 的 lagrange-python 实现。"""
 
-    def __init__(self, login: LoginConfig, paths: PathsConfig, bus: EventBus) -> None:
+    def __init__(self, login: LoginConfig, paths: PathsConfig, bus: EventBus, messages: Any = None) -> None:
         self._login = login
         self._paths = paths
         self._bus = bus
         self._client: Client | None = None
         self._info: InfoManager | None = None
-        self._adapter = LagrangeEventAdapter(bus)
+        self._adapter = LagrangeEventAdapter(bus, messages=messages)
 
     # ---- 生命周期 ----
 
@@ -289,11 +289,16 @@ class LagrangeQQClient:
             from_self=True,
         )
 
-    async def send_reaction(self, chat: ChatTarget, seq: int, emoji_id: str, is_cancel: bool = False) -> None:
+    async def send_reaction(
+        self, chat: ChatTarget, seq: int, emoji_id: str, emoji_type: int = 2, is_cancel: bool = False
+    ) -> None:
         """对消息发送表情回应；仅群聊支持，好友暂不支持。"""
         client = self._require_client()
         if isinstance(chat, GroupChat):
-            await client.send_grp_reaction(chat.group_id, seq, emoji_id, is_cancel=is_cancel)
+            if emoji_type == 1:
+                await client.send_grp_reaction(chat.group_id, seq, int(emoji_id), is_cancel=is_cancel)
+            else:
+                await client.send_grp_reaction(chat.group_id, seq, emoji_id, is_cancel=is_cancel)
         elif isinstance(chat, FriendChat):
             raise NotImplementedError("好友消息暂不支持表情回应")
         else:

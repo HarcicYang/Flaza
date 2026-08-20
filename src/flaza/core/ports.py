@@ -75,7 +75,9 @@ class QQClient(Protocol):
     async def recall_message(self, target: ChatTarget, seq: int) -> None:
         """撤回自己发送的指定 seq 消息。"""
 
-    async def send_reaction(self, chat: ChatTarget, seq: int, emoji_id: str, is_cancel: bool = False) -> None:
+    async def send_reaction(
+        self, chat: ChatTarget, seq: int, emoji_id: str, emoji_type: int = 2, is_cancel: bool = False
+    ) -> None:
         """对消息发送表情回应；仅群聊支持。"""
 
     async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:

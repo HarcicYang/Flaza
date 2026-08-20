@@ -165,7 +165,12 @@ class MessageRepository:
         reactions = list(current.reactions)
         for index, reaction in enumerate(reactions):
             if reaction.emoji_id == emoji_id and reaction.emoji_type == emoji_type:
-                reactions[index] = reaction.model_copy(update={"count": max(0, count)})
+                users = set(reaction.users)
+                if is_increase:
+                    users.add(operator_uid)
+                else:
+                    users.discard(operator_uid)
+                reactions[index] = reaction.model_copy(update={"count": max(0, count), "users": sorted(users)})
                 break
         else:
             if not is_increase or count <= 0:
@@ -287,6 +292,18 @@ class MessageRepository:
         if row is None or row["latest_id"] is None:
             return None
         return int(row["latest_id"])
+
+    async def get_by_seq(self, chat: ChatTarget, seq: int) -> StoredMessage | None:
+        """按会话和协议 seq 查询单条消息。"""
+        chat_kind, chat_id = _chat_columns(chat)
+        cursor = await self._db.execute(
+            "SELECT id, payload FROM messages WHERE chat_kind = ? AND chat_id = ? AND seq = ?",
+            (chat_kind, chat_id, seq),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return StoredMessage(id=int(row["id"]), message=decode_message(row["payload"]))
 
     async def mark_read(self, chat: ChatTarget, last_read_id: int) -> None:
         """更新会话已读游标，只允许向前推进。"""

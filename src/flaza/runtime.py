@@ -162,7 +162,7 @@ class ApplicationRuntime:
         if self._qq is not None:
             return
 
-        qq = LagrangeQQClient(self.config.login, self.config.paths, self.bus)
+        qq = LagrangeQQClient(self.config.login, self.config.paths, self.bus, messages=self.storage.messages)
         account_service = AccountService(qq, self.bus)
         contact_service = ContactService(qq, self.storage, self.bus)
         group_event_service = GroupEventService(self.storage)

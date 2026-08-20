@@ -45,7 +45,7 @@ class MessageList:
         state: UiStateStore,
         on_image_click: Callable[[ImagePreview], Awaitable[None]] | None = None,
         on_message_action: Callable[[str, StoredMessage], Awaitable[None]] | None = None,
-        on_reaction_selected: Callable[[StoredMessage, str], Awaitable[None]] | None = None,
+        on_reaction_selected: Callable[[StoredMessage, str, int, bool], Awaitable[None]] | None = None,
         on_load_older: Callable[[], Awaitable[None]] | None = None,
         on_file_download: Callable[[FileElement], Awaitable[None]] | None = None,
     ) -> None:
@@ -314,16 +314,24 @@ class MessageList:
             menu_items.append(("recall", "撤回"))
         # 回复按钮通过 hover actions 展示；表情选择器与气泡同树，保证
         # 刷新重建后仍保留右键菜单和 quick actions 的内部事件路由。
+        self_info = self._state.self_info()
+        self_uid = self_info.uid if self_info else None
+        stored = item
         bubble = MessageBubble(
             text=message.text,
-            content=build_message_content(message, self._on_image_click, self._on_file_download),
+            content=build_message_content(
+                message,
+                self._on_image_click,
+                self._on_file_download,
+                on_reaction_click=self._make_reaction_pill_handler(stored, self_uid),
+                self_uid=self_uid,
+            ),
             from_me=message.from_self,
             name=message.sender_name if isinstance(chat, GroupChat) and not message.from_self else None,
             avatar=avatar,
             menu_items=menu_items,
             actions=[("reply", "💬"), ("reaction", "😊")],
         )
-        stored = item
         reaction_picker = ReactionPicker(on_select=self._make_reaction_selected_handler(stored))
         bubble._col.container.append(reaction_picker.root)
         if self._on_message_action is not None:
@@ -358,7 +366,23 @@ class MessageList:
     def _make_reaction_selected_handler(self, stored: StoredMessage):
         async def handler(emoji: str) -> None:
             if self._on_reaction_selected is not None:
-                await self._on_reaction_selected(stored, emoji)
+                await self._on_reaction_selected(stored, emoji, 2, False)
+
+        return handler
+
+    def _make_reaction_pill_handler(self, stored: StoredMessage, self_uid: str | None):
+        async def handler(emoji: str) -> None:
+            if self._on_reaction_selected is None:
+                return
+            emoji_type = 2
+            is_cancel = False
+            for r in stored.message.reactions:
+                if r.emoji_id == emoji:
+                    emoji_type = r.emoji_type
+                    if self_uid is not None and self_uid in r.users:
+                        is_cancel = True
+                    break
+            await self._on_reaction_selected(stored, emoji, emoji_type, is_cancel)
 
         return handler
 

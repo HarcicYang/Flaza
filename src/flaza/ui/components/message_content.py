@@ -34,6 +34,7 @@ from flaza.ui.components.image_viewer import ImagePreview
 
 ImageClickHandler = Callable[[ImagePreview], Awaitable[None]]
 FileDownloadHandler = Callable[[FileElement], Awaitable[None]]
+ReactionClickHandler = Callable[[str], Awaitable[None]]
 
 _INLINE_ELEMENT_TYPES = (TextElement, AtElement, AtAllElement)
 
@@ -146,6 +147,8 @@ _REACTION = Styles(
     line_height="1",
 )
 
+_REACTION_MINE = _REACTION.model_copy(update={"background_color": stub.accent_glass_bg})
+
 _REACTION_EMOJI = Styles(
     font_size="14px",
     line_height="1",
@@ -163,6 +166,8 @@ def build_message_content(
     message: Message,
     on_image_click: ImageClickHandler | None = None,
     on_file_download: FileDownloadHandler | None = None,
+    on_reaction_click: ReactionClickHandler | None = None,
+    self_uid: str | None = None,
 ) -> DOMElement:
     """把消息元素渲染为 MessageBubble 的 content。
 
@@ -185,27 +190,48 @@ def build_message_content(
 
     # 添加表情回应显示
     if message.reactions:
-        reactions_row = _build_reactions(message)
+        reactions_row = _build_reactions(message, on_reaction_click=on_reaction_click, self_uid=self_uid)
         if reactions_row is not None:
             children.append(reactions_row)
 
     return Div(styles=_CONTENT, container=children)
 
 
-def _build_reactions(message: Message) -> DOMElement | None:
-    """渲染消息的表情回应行（表情与计数分开显示，避免混淆）。"""
+def _build_reactions(
+    message: Message,
+    *,
+    on_reaction_click: ReactionClickHandler | None = None,
+    self_uid: str | None = None,
+) -> DOMElement | None:
+    """渲染消息的表情回应行（表情与计数分开显示，避免混淆）。
+
+    已回应的 emoji 使用高亮背景；点击时回调 ``(emoji_id)``，
+    由调用方根据当前用户是否已回应该 emoji 决定 ``is_cancel``。
+    """
     if not message.reactions:
         return None
     reaction_els: list[DOMElement] = []
     for r in message.reactions:
         if r.count <= 0:
             continue
+        mine = self_uid is not None and self_uid in r.users
         emoji_span = Span(container=[r.emoji_id], styles=_REACTION_EMOJI)
         count_span = Span(container=[str(r.count)], styles=_REACTION_COUNT)
-        reaction_els.append(Div(styles=_REACTION, container=[emoji_span, count_span]))
+        pill = Div(styles=_REACTION_MINE if mine else _REACTION, container=[emoji_span, count_span])
+        pill.bubble_events = True
+        if on_reaction_click is not None:
+            pill.on("click", _make_reaction_pill_handler(on_reaction_click, r.emoji_id))
+        reaction_els.append(pill)
     if not reaction_els:
         return None
     return Div(styles=_REACTIONS_ROW, container=reaction_els)
+
+
+def _make_reaction_pill_handler(callback: ReactionClickHandler, emoji_id: str):
+    async def handler(_event: DomEvent) -> None:
+        await callback(emoji_id)
+
+    return handler
 
 
 def _build_element(
@@ -398,7 +424,7 @@ def _at_span(text: str, from_self: bool) -> Span:
 
 def _quote(element: QuoteElement, from_self: bool) -> Div:
     styles = _QUOTE_ME if from_self else _QUOTE_OTHER
-    sender = str(element.uin) if element.uin else "未知发送者"
+    sender = element.sender_name or str(element.uin) if element.uin else "未知发送者"
     timestamp = _format_quote_timestamp(element.timestamp)
     title = f"{sender} · {timestamp}" if timestamp else sender
     return Div(

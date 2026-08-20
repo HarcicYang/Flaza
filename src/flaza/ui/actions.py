@@ -179,6 +179,7 @@ class UiActions:
             timestamp=quoted.timestamp,
             uid=quoted.sender_uid,
             msg=quoted.text[:200],
+            sender_name=quoted.sender_name or str(quoted.sender_uin),
         )
 
         elements: list[MessageElement] = [quote]

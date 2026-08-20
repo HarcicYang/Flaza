@@ -1,5 +1,6 @@
 """消息元素 DOM 渲染测试。"""
 
+import asyncio
 from pathlib import Path
 
 from neony.dom import Anchor, Audio, Div, DOMElement, DomEvent, Img, Span, Video
@@ -9,9 +10,11 @@ from flaza.core.models import (
     AudioElement,
     FileElement,
     FriendChat,
+    GroupChat,
     ImageElement,
     MarketFaceElement,
     Message,
+    MessageReaction,
     PokeElement,
     QuoteElement,
     TextElement,
@@ -276,3 +279,41 @@ def test_unknown_element_renders_display_text() -> None:
 
     spans = [element for element in _walk(root) if isinstance(element, Span)]
     assert any(span.container and span.container[0] == "[卡片消息]" for span in spans)
+
+
+def test_reaction_pill_shows_self_reacted_highlight() -> None:
+    """自己回应的 emoji 使用高亮背景，未回应的使用普通背景。"""
+    calls: list[str] = []
+
+    async def on_click(emoji_id: str) -> None:
+        calls.append(emoji_id)
+
+    message = _message(TextElement(text="hi")).model_copy(
+        update={
+            "chat": GroupChat(group_id=20001),
+            "reactions": [
+                MessageReaction(emoji_id="😊", count=2, users=["u_self", "u_other"]),
+                MessageReaction(emoji_id="👍", count=1, users=["u_other"]),
+            ],
+        }
+    )
+    root = build_message_content(message, on_reaction_click=on_click, self_uid="u_self")
+
+    pills = [el for el in _walk(root) if isinstance(el, Div) and el.styles.cursor == "pointer"]
+    assert len(pills) == 2
+    assert pills[0].styles.background_color is not None
+    self_pill = pills[0]
+    other_pill = pills[1]
+    # self_uid 在 😊 的 users 中，所以第一个 pill 用高亮背景
+    assert self_pill.styles.background_color != other_pill.styles.background_color
+
+    # 点击第二个 pill（👍），回调应收到 emoji_id
+    handlers = other_pill._handlers.get("click", [])
+    assert handlers
+
+    async def run() -> None:
+        for handler in handlers:
+            await handler(DomEvent(key=other_pill.key, type="click"))
+
+    asyncio.run(run())
+    assert calls == ["👍"]

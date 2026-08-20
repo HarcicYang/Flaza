@@ -26,6 +26,7 @@ from lagrange.client.events.group import (
     GroupNameChanged as LagrangeGroupNameChanged,
 )
 from lagrange.client.events.service import ClientOffline, ClientOnline, ServerKick
+from lagrange.client.message import elems as lagrange_elems
 
 from flaza.core.events import (
     ConnectionStateChanged,
@@ -44,6 +45,7 @@ from flaza.core.events import (
     GroupMemberQuit as GroupMemberQuitEvent,
 )
 from flaza.core.models import ConnectionState, FriendChat, GroupChat, GroupMemberRole
+from flaza.core.storage.repositories.messages import MessageRepository
 from flaza.qq.convert import friend_message_to_domain, group_message_to_domain
 
 logger = logging.getLogger(__name__)
@@ -52,12 +54,13 @@ logger = logging.getLogger(__name__)
 class LagrangeEventAdapter:
     """把 lagrange 事件转换为 Flaza 领域事件。"""
 
-    def __init__(self, bus: EventBus) -> None:
+    def __init__(self, bus: EventBus, messages: MessageRepository | None = None) -> None:
         self._bus = bus
         self._client: Client | None = None
         self._group_message_lock = asyncio.Lock()
         self._member_role_cache: dict[tuple[int, str], GroupMemberRole] = {}
         self._member_role_failed_at: dict[tuple[int, str], float] = {}
+        self._messages = messages
 
     def subscribe(self, client: Client) -> None:
         """注册所有 MVP 所需的 lagrange 事件。"""
@@ -182,7 +185,8 @@ class LagrangeEventAdapter:
 
     async def _on_group_message(self, client: Client, event: Any) -> None:
         async with self._group_message_lock:
-            message = group_message_to_domain(event, client.uin)
+            uid_to_nickname = await self._resolve_quote_nicknames(event)
+            message = group_message_to_domain(event, client.uin, uid_to_nickname=uid_to_nickname)
             if (
                 isinstance(message.chat, GroupChat)
                 and not message.from_self
@@ -192,6 +196,20 @@ class LagrangeEventAdapter:
                 message = message.model_copy(update={"sender_role": role})
             logger.debug("收到群消息: chat=%s seq=%s", message.chat.key, message.seq)
             self._bus.publish(MessageReceived(message=message))
+
+    async def _resolve_quote_nicknames(self, event: Any) -> dict[str, str] | None:
+        """遍历 msg_chain 中的 Quote 元素，查被引用消息的 sender_name。"""
+        if self._messages is None:
+            return None
+        uid_to_nickname: dict[str, str] = {}
+        for elem in event.msg_chain:
+            if isinstance(elem, lagrange_elems.Quote):
+                chat = GroupChat(group_id=event.grp_id)
+                stored = await self._messages.get_by_seq(chat, elem.seq)
+                if stored is not None:
+                    name = stored.message.sender_name or str(elem.uin)
+                    uid_to_nickname[elem.uid or str(elem.uin)] = name
+        return uid_to_nickname or None
 
     async def _on_client_online(self, _client: Client, _event: Any) -> None:
         self._bus.publish(ConnectionStateChanged(state=ConnectionState.ONLINE))

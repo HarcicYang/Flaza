@@ -201,6 +201,7 @@ class QuoteElement(BaseModel):
     timestamp: int
     uid: str = ""
     msg: str = ""
+    sender_name: str = ""
 
     @property
     def preview_text(self) -> str:

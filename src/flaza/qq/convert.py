@@ -62,7 +62,9 @@ def friend_message_to_domain(event: FriendMessage, self_uin: int) -> Message:
     )
 
 
-def group_message_to_domain(event: GroupMessage, self_uin: int) -> Message:
+def group_message_to_domain(
+    event: GroupMessage, self_uin: int, uid_to_nickname: dict[str, str] | None = None
+) -> Message:
     """把群消息事件转换为领域消息。"""
     return Message(
         chat=GroupChat(group_id=event.grp_id),
@@ -72,7 +74,7 @@ def group_message_to_domain(event: GroupMessage, self_uin: int) -> Message:
         seq=event.seq,
         rand=event.rand,
         timestamp=event.time,
-        elements=_convert_elements(event.msg_chain),
+        elements=_convert_elements(event.msg_chain, uid_to_nickname=uid_to_nickname),
         from_self=event.uin == self_uin,
         sender_is_bot=event.is_bot,
         sender_role=GroupMemberRole.BOT if event.is_bot else GroupMemberRole.MEMBER,
@@ -109,7 +111,7 @@ def lagrange_file_to_domain(element: lagrange_elems.File) -> FileElement:
     )
 
 
-def _convert_elements(msg_chain: list[Any]) -> list[MessageElement]:
+def _convert_elements(msg_chain: list[Any], uid_to_nickname: dict[str, str] | None = None) -> list[MessageElement]:
     """把 lagrange 元素精确映射为领域元素。
 
     GreyTips 是只发不收的元素，本期不提供发送能力，因此不建立领域模型；
@@ -167,6 +169,7 @@ def _convert_elements(msg_chain: list[Any]) -> list[MessageElement]:
         elif isinstance(element, lagrange_elems.Poke):
             elements.append(PokeElement(id=element.id))
         elif isinstance(element, lagrange_elems.Quote):
+            sender_name = uid_to_nickname.get(element.uid or str(element.uin), "") if uid_to_nickname else ""
             elements.append(
                 QuoteElement(
                     seq=element.seq,
@@ -174,6 +177,7 @@ def _convert_elements(msg_chain: list[Any]) -> list[MessageElement]:
                     timestamp=element.timestamp,
                     uid=element.uid,
                     msg=element.msg,
+                    sender_name=sender_name,
                 )
             )
         elif isinstance(element, lagrange_elems.MulitMsg):
@@ -182,4 +186,14 @@ def _convert_elements(msg_chain: list[Any]) -> list[MessageElement]:
             original_kind = str(getattr(element, "type", type(element).__name__))
             display = _UNKNOWN_ELEMENT_DISPLAY.get(original_kind) or getattr(element, "display", "") or "[未知消息]"
             elements.append(UnknownElement(original_kind=original_kind, display=display))
+    # 过滤紧随 reply 后的第一个 @，避免与回复引用重复提及同一人
+    if (
+        len(elements) >= 2
+        and isinstance(elements[0], QuoteElement)
+        and isinstance(elements[1], AtElement)
+        and elements[0].uid
+        and elements[1].uid
+        and elements[1].uid == elements[0].uid
+    ):
+        elements.pop(1)
     return elements

@@ -241,13 +241,13 @@ class HomePage:
             )
             await self._show_error("操作失败")
 
-    async def _on_reaction_selected(self, stored: StoredMessage, emoji: str) -> None:
-        """发送指定消息的表情回应。"""
+    async def _on_reaction_selected(self, stored: StoredMessage, emoji: str, emoji_type: int, is_cancel: bool) -> None:
+        """发送/取消指定消息的表情回应。"""
         try:
             chat = stored.message.chat
             qq = self._actions._runtime._qq
             if qq is not None and isinstance(chat, GroupChat):
-                await qq.send_reaction(chat, stored.message.seq, emoji)
+                await qq.send_reaction(chat, stored.message.seq, emoji, emoji_type=emoji_type, is_cancel=is_cancel)
         except Exception as exc:
             logger.exception("发送表情回应失败")
             await self._show_error(f"表情回应失败：{exc}")
