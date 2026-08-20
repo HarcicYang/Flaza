@@ -23,7 +23,6 @@ from flaza.ui.components.image_viewer import ImageViewer
 from flaza.ui.components.message_list import MessageList
 from flaza.ui.components.new_chat_dialog import NewChatDialog
 from flaza.ui.components.session_list import SessionList
-from flaza.ui.components.settings_dialog import SettingsDialog
 from flaza.ui.state import UiStateStore
 
 logger = logging.getLogger(__name__)
@@ -66,6 +65,8 @@ _DROP_HINT_CARD = Styles(
 )
 
 _SYNC_FLOAT = Styles(
+    display="flex",
+    flex_direction="column",
     position="fixed",
     top="52px",
     left="50%",
@@ -96,7 +97,6 @@ class HomePage:
         self._actions = actions
         self._config = config
         self._render = render
-        self._settings_el: DOMElement | None = None
         self._new_chat: NewChatDialog | None = None
         self._new_chat_el: DOMElement | None = None
         self._state_refresh_task: asyncio.Task[None] | None = None
@@ -124,8 +124,10 @@ class HomePage:
 
         sync_progress = Progress(indeterminate=True, label="正在同步离线消息…")
         sync_root = sync_progress.build()
-        sync_float = Div(styles=_SYNC_FLOAT, container=[sync_root])
-        sync_float.bind_visible(state.sync_in_progress)
+        sync_root.styles = sync_root.styles.model_copy(
+            update={key: getattr(_SYNC_FLOAT, key) for key in _SYNC_FLOAT.model_fields_set}
+        )
+        sync_root.bind_visible(state.sync_in_progress)
 
         self._dragging_files = Signal(False)
         drop_hint = Div(
@@ -143,7 +145,7 @@ class HomePage:
             styles=Styles(display="flex", flex_direction="column", width="100%", flex_grow="1", min_height="0"),
             container=[
                 body,
-                sync_float,
+                sync_root,
                 self.image_viewer.root,
                 self.toast.build(),
                 drop_hint,
@@ -313,16 +315,6 @@ class HomePage:
         self._new_chat = dialog
         self._new_chat_el = dialog.dialog.build()
         self.root.container.append(self._new_chat_el)
-        await self._render()
-
-    async def open_settings(self) -> None:
-        if self._settings_el is not None:
-            with contextlib.suppress(ValueError):
-                self.root.container.remove(self._settings_el)
-        config = self._actions.current_config()
-        dialog = SettingsDialog(self._actions, config.login, config.window)
-        self._settings_el = dialog.dialog.build()
-        self.root.container.append(self._settings_el)
         await self._render()
 
     async def _select_chat(self, chat: ChatTarget) -> None:

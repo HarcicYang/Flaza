@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Literal, cast
+from typing import cast
 
-from neony.application.elements import Dialog, DialogAction, Radio, RadioGroup, Text, VStack
+from neony.application.elements import CascadingDropdown, Dialog, DialogAction, MenuBranch, ScrollArea, Text, VStack
 
-from flaza.config import LoginConfig, WindowSettings
+from flaza.config import LoginConfig, ThemeName, WindowSettings
 from flaza.ui.actions import UiActions
 from flaza.ui.components.login_config_form import LoginConfigForm
 
@@ -19,25 +19,31 @@ class SettingsDialog:
         self._initial_login = initial_login
         self._initial_window = initial_window
         self.form = LoginConfigForm(initial_login)
-        self._theme_group = RadioGroup(
-            Radio("深色", value="dark"),
-            Radio("浅色", value="light"),
-            Radio("深蓝", value="deep_blue"),
-            value=initial_window.theme,
-            orientation="horizontal",
+        self._theme_dropdown = CascadingDropdown(
+            "选择主题",
+            items=(
+                MenuBranch("Nightglow", (("nightglow-dark", "深色"), ("nightglow-light", "浅色"))),
+                MenuBranch("Planet Plaza", (("planet-plaza-dark", "深色"), ("planet-plaza-light", "浅色"))),
+                MenuBranch("Ember Zone", (("ember-zone-dark", "深色"), ("ember-zone-light", "浅色"))),
+                MenuBranch("Cyberangel", (("cyberangel-dark", "深色"), ("cyberangel-light", "浅色"))),
+            ),
+            width="160px",
         )
+        self._theme_dropdown.value = initial_window.theme
         self._error = Text("", role="danger")
 
-        content = VStack(
+        form_content = VStack(
             Text("登录配置", size="14px", weight="600"),
             self.form.root,
             Text("应用设置", size="14px", weight="600"),
             Text("主题"),
-            self._theme_group,
+            self._theme_dropdown,
             self._error,
             gap="12px",
             align="stretch",
         ).build()
+        content = ScrollArea(form_content).build()
+        content.styles = content.styles.model_copy(update={"height": "min(560px, 60vh)"})
 
         self.dialog = Dialog(
             title="设置",
@@ -55,7 +61,7 @@ class SettingsDialog:
             self.form.set_error("")
             self._error.text = ""
 
-            theme = cast(Literal["dark", "light", "deep_blue"], self._theme_group.value)
+            theme = cast(ThemeName, self._theme_dropdown.value)
             login = self.form.values()
 
             if theme != self._initial_window.theme:

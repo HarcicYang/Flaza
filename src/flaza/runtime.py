@@ -5,7 +5,18 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from neony.application import DARK, DEEP_BLUE, LIGHT, NeonApplication, Theme
+from neony.application import (
+    CYBERANGEL_DARK,
+    CYBERANGEL_LIGHT,
+    EMBER_ZONE_DARK,
+    EMBER_ZONE_LIGHT,
+    NIGHTGLOW_DARK,
+    NIGHTGLOW_LIGHT,
+    PLANET_PLAZA_DARK,
+    PLANET_PLAZA_LIGHT,
+    NeonApplication,
+    Theme,
+)
 
 from flaza.config import AppConfig
 from flaza.core.events import (
@@ -31,9 +42,14 @@ from flaza.ui.state import UiStateStore
 logger = logging.getLogger(__name__)
 
 THEME_MAP: dict[str, Theme] = {
-    "dark": DARK,
-    "light": LIGHT,
-    "deep_blue": DEEP_BLUE,
+    "nightglow-dark": NIGHTGLOW_DARK,
+    "nightglow-light": NIGHTGLOW_LIGHT,
+    "planet-plaza-dark": PLANET_PLAZA_DARK,
+    "planet-plaza-light": PLANET_PLAZA_LIGHT,
+    "ember-zone-dark": EMBER_ZONE_DARK,
+    "ember-zone-light": EMBER_ZONE_LIGHT,
+    "cyberangel-dark": CYBERANGEL_DARK,
+    "cyberangel-light": CYBERANGEL_LIGHT,
 }
 
 

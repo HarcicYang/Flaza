@@ -1,4 +1,4 @@
-"""设置对话框测试。"""
+"""设置页面测试。"""
 
 import asyncio
 
@@ -7,17 +7,28 @@ import pytest
 import flaza.ui.actions as actions_module
 from flaza.config import AppConfig
 from flaza.runtime import ApplicationRuntime
-from flaza.ui.components.settings_dialog import SettingsDialog
+from flaza.ui.pages.settings import SettingsPage
 
 
-def test_settings_dialog_contains_login_form_and_theme() -> None:
-    config = AppConfig()
-    runtime = ApplicationRuntime(config)
-    dialog = SettingsDialog(runtime.actions, config.login, config.window)
+def _settings_page(runtime: ApplicationRuntime, on_close=None) -> SettingsPage:
+    async def default_close() -> None:
+        return None
 
-    assert dialog.form is not None
-    assert dialog._theme_group.value == "dark"
-    assert dialog.dialog.title == "设置"
+    return SettingsPage(
+        runtime.actions,
+        runtime.config.login,
+        runtime.config.window,
+        runtime.render,
+        on_close or default_close,
+    )
+
+
+def test_settings_page_contains_login_form_and_theme() -> None:
+    runtime = ApplicationRuntime(AppConfig())
+    page = _settings_page(runtime)
+
+    assert page.form is not None
+    assert page._theme_dropdown.value == "nightglow-dark"
 
 
 def test_save_theme_persists_config_and_applies_without_restart(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -31,14 +42,31 @@ def test_save_theme_persists_config_and_applies_without_restart(monkeypatch: pyt
     monkeypatch.setattr(actions_module, "save_config", fake_save)
 
     async def scenario() -> None:
-        await runtime.actions.save_theme("light")
-        assert runtime.config.window.theme == "light"
-        assert runtime.actions.current_config().window.theme == "light"
-        assert saved[-1].window.theme == "light"
+        await runtime.actions.save_theme("nightglow-light")
+        assert runtime.config.window.theme == "nightglow-light"
+        assert runtime.actions.current_config().window.theme == "nightglow-light"
+        assert saved[-1].window.theme == "nightglow-light"
 
-        reopened = SettingsDialog(
-            runtime.actions, runtime.actions.current_config().login, runtime.actions.current_config().window
-        )
-        assert reopened._theme_group.value == "light"
+        reopened = _settings_page(runtime)
+        assert reopened._theme_dropdown.value == "nightglow-light"
+
+    asyncio.run(scenario())
+
+
+def test_save_theme_returns_to_previous_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = ApplicationRuntime(AppConfig())
+    monkeypatch.setattr(actions_module, "save_config", lambda _config: None)
+    closed = False
+
+    async def close() -> None:
+        nonlocal closed
+        closed = True
+
+    page = _settings_page(runtime, close)
+
+    async def scenario() -> None:
+        page._theme_dropdown.value = "planet-plaza-light"
+        await page._on_save(None)  # type: ignore[arg-type]
+        assert closed is True
 
     asyncio.run(scenario())

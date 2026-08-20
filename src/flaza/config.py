@@ -10,6 +10,23 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict
 
+ThemeName = Literal[
+    "nightglow-dark",
+    "nightglow-light",
+    "planet-plaza-dark",
+    "planet-plaza-light",
+    "ember-zone-dark",
+    "ember-zone-light",
+    "cyberangel-dark",
+    "cyberangel-light",
+]
+
+_LEGACY_THEMES: dict[str, ThemeName] = {
+    "dark": "nightglow-dark",
+    "light": "nightglow-light",
+    "deep_blue": "planet-plaza-dark",
+}
+
 
 class LoginConfig(BaseModel):
     """登录与签名服务配置。"""
@@ -42,7 +59,7 @@ class WindowSettings(BaseModel):
     title: str = "Flaza"
     width: int = 960
     height: int = 640
-    theme: Literal["dark", "light", "deep_blue"] = "dark"
+    theme: ThemeName = "nightglow-dark"
     devtools: bool = False
 
 
@@ -75,6 +92,9 @@ def load_config(path: str | Path = "appconfig.json") -> AppConfig:
 
     with config_path.open(encoding="utf-8") as file:
         data = json.load(file)
+    theme = data.get("window", {}).get("theme")
+    if theme in _LEGACY_THEMES:
+        data.setdefault("window", {})["theme"] = _LEGACY_THEMES[theme]
     return AppConfig.model_validate(data)
 
 

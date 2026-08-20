@@ -10,9 +10,9 @@ import sys
 import urllib.request
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
-from flaza.config import AppConfig, LoginConfig, save_config
+from flaza.config import AppConfig, LoginConfig, ThemeName, save_config
 from flaza.core.models import (
     AtAllElement,
     AtElement,
@@ -377,14 +377,13 @@ class UiActions:
         """返回运行时最新的配置，避免页面持有启动时的旧快照。"""
         return self._runtime.config
 
-    async def save_theme(self, theme: Literal["dark", "light", "deep_blue"]) -> None:
+    async def save_theme(self, theme: ThemeName) -> None:
         """保存主题配置并立即应用，无需重启。"""
         window = self._runtime.config.window.model_copy(update={"theme": theme})
         config = self._runtime.config.model_copy(update={"window": window})
         save_config(config)
         self._runtime.config = config
         await self._runtime.set_theme(theme)
-        await self._runtime.render()
 
     def save_login_config(self, login: LoginConfig) -> None:
         """保存登录配置并重启应用，让新配置在下一次启动时生效。"""

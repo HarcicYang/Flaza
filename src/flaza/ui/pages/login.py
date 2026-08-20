@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Awaitable, Callable
 
 from neony.application.elements import Button, Heading, Progress, Text, VStack
-from neony.dom import Computed, Div, DOMElement, DomEvent, Styles
+from neony.dom import Computed, Div, DomEvent, Styles
 
 from flaza.config import AppConfig
 from flaza.core.models import LoginPhase
 from flaza.ui.actions import UiActions
 from flaza.ui.components.qr_code import QrCodeView
-from flaza.ui.components.settings_dialog import SettingsDialog
 from flaza.ui.state import UiStateStore
 
 
@@ -25,12 +23,13 @@ class LoginPage:
         actions: UiActions,
         config: AppConfig,
         render: Callable[[], Awaitable[None]],
+        on_open_settings: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._state = state
         self._actions = actions
         self._config = config
         self._render = render
-        self._settings_dialog_el: DOMElement | None = None
+        self._on_open_settings = on_open_settings
 
         status = Text("正在启动…", role="secondary")
         status.bind_text(state.login_phase, fmt=lambda phase: f"登录状态：{phase.value}")
@@ -59,7 +58,7 @@ class LoginPage:
         start_button = Button("开始扫码登录")
         start_button.on_click(self._on_start_login)
         settings_button = Button("设置", variant="ghost")
-        settings_button.on_click(self._on_open_settings)
+        settings_button.on_click(self._on_open_settings_click)
 
         panel = VStack(
             Heading("登录 Flaza", level=1),
@@ -94,12 +93,6 @@ class LoginPage:
             # UiActions 内部会把失败写回状态；这里只兜底避免事件处理器崩溃。
             return
 
-    async def _on_open_settings(self, _event: DomEvent) -> None:
-        if self._settings_dialog_el is not None:
-            with contextlib.suppress(ValueError):
-                self.root.container.remove(self._settings_dialog_el)
-        config = self._actions.current_config()
-        settings = SettingsDialog(self._actions, config.login, config.window)
-        self._settings_dialog_el = settings.dialog.build()
-        self.root.container.append(self._settings_dialog_el)
-        await self._render()
+    async def _on_open_settings_click(self, _event: DomEvent) -> None:
+        if self._on_open_settings is not None:
+            await self._on_open_settings()

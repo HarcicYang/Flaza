@@ -1,5 +1,6 @@
 """配置读写测试。"""
 
+import json
 from pathlib import Path
 
 from flaza.config import AppConfig, load_config, save_config
@@ -13,6 +14,16 @@ def test_load_config_creates_default_file(tmp_path: Path) -> None:
     assert config.login.uin == 0
     assert config.paths.media_cache_dir == "./media_cache"
     assert path.exists()
+    assert config.window.theme == "nightglow-dark"
+
+
+def test_load_config_migrates_legacy_theme(tmp_path: Path) -> None:
+    path = tmp_path / "appconfig.json"
+    path.write_text(json.dumps({"window": {"theme": "deep_blue"}}), encoding="utf-8")
+
+    config = load_config(path)
+
+    assert config.window.theme == "planet-plaza-dark"
 
 
 def test_login_configured_requires_uin_and_signer_url() -> None:

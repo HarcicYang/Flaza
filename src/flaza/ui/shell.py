@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
+from neony.application import icons
 from neony.application.elements import Button, Icon, Text, TitleBar
 from neony.application.theme import stub
 from neony.dom import Color, Computed, Div, DOMElement, DomEvent, Styles
@@ -15,6 +16,7 @@ from flaza.ui.actions import UiActions
 from flaza.ui.avatars import friend_avatar_url
 from flaza.ui.pages.home import HomePage
 from flaza.ui.pages.login import LoginPage
+from flaza.ui.pages.settings import SettingsPage
 from flaza.ui.pages.setup import SetupPage
 from flaza.ui.state import UiStateStore
 
@@ -36,9 +38,9 @@ _ICON_BUTTON = Styles(
 )
 
 
-def _icon_button(glyph: str, title: str) -> DOMElement:
+def _icon_button(icon: Icon, title: str) -> DOMElement:
     """构造带 title / aria-label 的紧凑图标按钮。"""
-    button = Button("", variant="ghost", icon=glyph)
+    button = Button("", variant="ghost", icon=icon)
     button.reset_styles(_ICON_BUTTON)
     element = button.build()
     element.args["title"] = title
@@ -63,6 +65,7 @@ class ShellView:
         self._config = config
         self._render = render
         self._screen = "setup" if not config.login_configured else "login"
+        self._settings_return_screen = self._screen
         self._home: HomePage | None = None
 
         titlebar = TitleBar(config.window.title, icon=Icon.image(friend_avatar_url(0)))
@@ -129,7 +132,7 @@ class ShellView:
         if self._screen == "setup":
             self._mount(SetupPage(actions, config, render).root)
         else:
-            self._mount(LoginPage(state, actions, config, render).root)
+            self._mount(LoginPage(state, actions, config, render, self._open_settings).root)
 
         bus.subscribe(LoginPhaseChanged, self._on_login_phase)
 
@@ -146,16 +149,34 @@ class ShellView:
         self._content.container.clear()
         self._content.container.append(element)
 
+    async def _open_settings(self) -> None:
+        config = self._actions.current_config()
+        self._settings_return_screen = self._screen
+        self._toolbar.container.clear()
+        self._screen = "settings"
+        self._mount(SettingsPage(self._actions, config.login, config.window, self._render, self._close_settings).root)
+        await self._render()
+
+    async def _close_settings(self) -> None:
+        if getattr(self, "_settings_return_screen", "main") == "login":
+            self._screen = "login"
+            self._mount(LoginPage(self._state, self._actions, self._config, self._render, self._open_settings).root)
+        elif self._home is not None:
+            self._screen = "main"
+            self._mount(self._home.root)
+            self._install_main_toolbar(self._home)
+        await self._render()
+
     def _install_main_toolbar(self, home: HomePage) -> None:
         async def open_new_chat(_event: DomEvent) -> None:
             await home.open_new_chat()
 
         async def open_settings(_event: DomEvent) -> None:
-            await home.open_settings()
+            await self._open_settings()
 
         self._toolbar.container.clear()
-        new_chat = _icon_button("💬", "新会话")
+        new_chat = _icon_button(icons.chat, "新会话")
         new_chat.on_click(open_new_chat)
-        settings = _icon_button("⚙️", "设置")
+        settings = _icon_button(icons.settings, "设置")
         settings.on_click(open_settings)
         self._toolbar.container.extend([new_chat, settings])

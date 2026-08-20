@@ -13,6 +13,7 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from neony.application import icons
 from neony.application.elements import Button, ImageSegment, Menu, RichText, TextSegment
 from neony.application.elements.rich_text import RichSegment
 from neony.application.theme import stub
@@ -134,8 +135,8 @@ class Composer:
         self._editor.on("keyup", self._on_keyup)
         self._editor.on("keydown", self._on_keydown)
 
-        self._send_button = Button("", variant="primary", icon="➤").reset_styles(_SEND_BUTTON)
-        self._plus_button = Button("", variant="ghost", icon="＋").reset_styles(_ICON_BUTTON)
+        self._send_button = Button("", variant="primary", icon=icons.arrow_upward).reset_styles(_SEND_BUTTON)
+        self._plus_button = Button("", variant="ghost", icon=icons.add).reset_styles(_ICON_BUTTON)
         self._plus_menu = Menu(("image", "插入图片"), ("text", "新增文字"), ("file", "发送文件"))
         self._plus_menu.on_change(self._on_plus_menu_change)
 
