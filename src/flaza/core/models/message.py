@@ -258,6 +258,17 @@ MessageElement = Annotated[
 ]
 
 
+class MessageReaction(BaseModel):
+    """消息表情回应。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    emoji_id: str
+    emoji_type: int = 2  # 1=QQ内置, 2=Unicode
+    count: int = 0
+    users: list[str] = []  # uid 列表
+
+
 class Message(BaseModel):
     """统一的领域消息模型。
 
@@ -279,6 +290,7 @@ class Message(BaseModel):
     recalled: bool = False
     sender_is_bot: bool = False
     sender_role: GroupMemberRole = GroupMemberRole.MEMBER
+    reactions: list[MessageReaction] = []
 
     @property
     def text(self) -> str:

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import aiosqlite
 
-from flaza.core.models import ChatTarget, Message, StoredMessage
+from flaza.core.models import ChatTarget, GroupChat, Message, MessageReaction, StoredMessage
 from flaza.core.storage.codec import decode_message, encode_message
 
 if TYPE_CHECKING:
@@ -52,6 +52,8 @@ class MessageRepository:
             ),
         )
         await self._db.commit()
+        if isinstance(message.chat, GroupChat):
+            await self._apply_pending_reactions(message.chat, message.seq)
 
         cursor = await self._db.execute(
             "SELECT id FROM messages WHERE chat_kind = ? AND chat_id = ? AND seq = ?",
@@ -124,6 +126,121 @@ class MessageRepository:
         )
         await self._db.commit()
         return merged if cursor.rowcount > 0 else None
+
+    async def apply_group_reaction(
+        self,
+        chat: ChatTarget,
+        seq: int,
+        emoji_id: str,
+        emoji_type: int,
+        count: int,
+        *,
+        is_increase: bool,
+        operator_uid: str,
+    ) -> StoredMessage | None:
+        """合并一条群表情事件并立即持久化。
+
+        此方法不依赖 UI 当前是否打开该群，因此启动同步期间收到的回应
+        也会写入本地消息 payload，供之后进入会话时恢复。
+        """
+        chat_kind, chat_id = _chat_columns(chat)
+        cursor = await self._db.execute(
+            "SELECT id, payload FROM messages WHERE chat_kind = ? AND chat_id = ? AND seq = ?",
+            (chat_kind, chat_id, seq),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            await self._store_pending_reaction(
+                chat,
+                seq,
+                emoji_id,
+                emoji_type,
+                count,
+                is_increase=is_increase,
+                operator_uid=operator_uid,
+            )
+            return None
+
+        current = decode_message(row["payload"])
+        reactions = list(current.reactions)
+        for index, reaction in enumerate(reactions):
+            if reaction.emoji_id == emoji_id and reaction.emoji_type == emoji_type:
+                reactions[index] = reaction.model_copy(update={"count": max(0, count)})
+                break
+        else:
+            if not is_increase or count <= 0:
+                return StoredMessage(id=int(row["id"]), message=current)
+            reactions.append(
+                MessageReaction(
+                    emoji_id=emoji_id,
+                    emoji_type=emoji_type,
+                    count=count,
+                    users=[operator_uid],
+                )
+            )
+
+        merged = current.model_copy(update={"reactions": reactions})
+        await self._db.execute(
+            "UPDATE messages SET payload = ? WHERE chat_kind = ? AND chat_id = ? AND seq = ?",
+            (encode_message(merged), chat_kind, chat_id, seq),
+        )
+        await self._db.commit()
+        return StoredMessage(id=int(row["id"]), message=merged)
+
+    async def _store_pending_reaction(
+        self,
+        chat: ChatTarget,
+        seq: int,
+        emoji_id: str,
+        emoji_type: int,
+        count: int,
+        *,
+        is_increase: bool,
+        operator_uid: str,
+    ) -> None:
+        if not isinstance(chat, GroupChat):
+            return
+        await self._db.execute(
+            """
+            INSERT INTO pending_group_reactions
+                (group_id, seq, emoji_id, emoji_type, count, is_increase, operator_uid)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (group_id, seq, emoji_id, emoji_type) DO UPDATE SET
+                count = excluded.count,
+                is_increase = excluded.is_increase,
+                operator_uid = excluded.operator_uid
+            """,
+            (chat.group_id, seq, emoji_id, emoji_type, count, int(is_increase), operator_uid),
+        )
+        await self._db.commit()
+
+    async def _apply_pending_reactions(self, chat: GroupChat, seq: int) -> None:
+        cursor = await self._db.execute(
+            """
+            SELECT emoji_id, emoji_type, count, is_increase, operator_uid
+            FROM pending_group_reactions
+            WHERE group_id = ? AND seq = ?
+            """,
+            (chat.group_id, seq),
+        )
+        pending = await cursor.fetchall()
+        if not pending:
+            return
+        for row in pending:
+            await self.apply_group_reaction(
+                chat,
+                seq,
+                str(row["emoji_id"]),
+                int(row["emoji_type"]),
+                int(row["count"]),
+                is_increase=bool(row["is_increase"]),
+                operator_uid=str(row["operator_uid"]),
+            )
+        await self._db.execute(
+            "DELETE FROM pending_group_reactions WHERE group_id = ? AND seq = ?",
+            (chat.group_id, seq),
+        )
+        await self._db.commit()
 
     async def mark_recalled(self, chat: ChatTarget, seq: int) -> bool:
         """把指定消息标记为已撤回，返回是否更新成功。"""

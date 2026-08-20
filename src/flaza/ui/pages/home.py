@@ -16,7 +16,7 @@ from flaza.config import AppConfig
 from flaza.core.events import (
     EventBus,
 )
-from flaza.core.models import ChatTarget, FileElement, StoredMessage
+from flaza.core.models import ChatTarget, FileElement, GroupChat, GroupMemberRole, StoredMessage
 from flaza.ui.actions import UiActions
 from flaza.ui.components.composer import Composer
 from flaza.ui.components.image_viewer import ImageViewer
@@ -111,6 +111,7 @@ class HomePage:
             state,
             on_image_click=self.image_viewer.open,
             on_message_action=self._on_message_action,
+            on_reaction_selected=self._on_reaction_selected,
             on_load_older=self._on_load_older,
             on_file_download=self._on_file_download,
         )
@@ -140,7 +141,13 @@ class HomePage:
         body = Div(styles=_BODY, container=[self.session_list.root, right])
         self.root = Div(
             styles=Styles(display="flex", flex_direction="column", width="100%", flex_grow="1", min_height="0"),
-            container=[body, sync_float, self.image_viewer.root, self.toast.build(), drop_hint],
+            container=[
+                body,
+                sync_float,
+                self.image_viewer.root,
+                self.toast.build(),
+                drop_hint,
+            ],
         )
         self.root.bubble_events = True
         self.root.on_dragover(self._on_dragover)
@@ -222,6 +229,9 @@ class HomePage:
                 file = next((item for item in stored.message.elements if isinstance(item, FileElement)), None)
                 if file is not None:
                     await self._on_file_download(file)
+            elif value == "reply":
+                self.composer.set_reply_to(stored)
+                await self._render()
         except Exception:
             logger.exception(
                 "消息菜单动作失败: action=%s chat=%s seq=%s",
@@ -230,6 +240,18 @@ class HomePage:
                 stored.message.seq,
             )
             await self._show_error("操作失败")
+
+    async def _on_reaction_selected(self, stored: StoredMessage, emoji: str) -> None:
+        """发送指定消息的表情回应。"""
+        try:
+            chat = stored.message.chat
+            qq = self._actions._runtime._qq
+            if qq is not None and isinstance(chat, GroupChat):
+                await qq.send_reaction(chat, stored.message.seq, emoji)
+        except Exception as exc:
+            logger.exception("发送表情回应失败")
+            await self._show_error(f"表情回应失败：{exc}")
+        await self._render()
 
     async def _on_dragover(self, _event: object) -> None:
         if not self._dragging_files():
@@ -308,3 +330,23 @@ class HomePage:
 
     async def _open_and_refresh(self, chat: ChatTarget) -> None:
         await self._actions.open_chat(chat)
+        # 更新 Composer 的群成员上下文（用于 @ 提及）
+        await self._update_composer_context(chat)
+
+    async def _update_composer_context(self, chat: ChatTarget) -> None:
+        """根据当前会话更新 Composer 的群成员上下文。"""
+        if isinstance(chat, GroupChat):
+            try:
+                members = await self._actions._runtime.storage.members.list_by_group(chat.group_id)
+                self_info = self._state.self_info()
+                # 判断当前用户是否是群主或管理员
+                can_mention_all = False
+                if self_info is not None:
+                    my_role = self._state.group_roles().get(f"{chat.group_id}:{self_info.uid}")
+                    can_mention_all = my_role in (GroupMemberRole.OWNER, GroupMemberRole.ADMIN)
+                self.composer.set_group_context(chat.group_id, members, can_mention_all=can_mention_all)
+            except Exception:
+                logger.exception("加载群成员失败: group=%s", chat.group_id)
+                self.composer.set_group_context(chat.group_id, [], can_mention_all=False)
+        else:
+            self.composer.set_group_context(None)

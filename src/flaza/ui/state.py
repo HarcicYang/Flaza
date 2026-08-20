@@ -17,6 +17,7 @@ from flaza.core.events import (
     GroupMemberQuit,
     GroupMembersUpdated,
     GroupNameChanged,
+    GroupReactionChanged,
     LoginPhaseChanged,
     MessageMediaCached,
     MessageRecalled,
@@ -31,6 +32,7 @@ from flaza.core.models import (
     ConnectionState,
     Friend,
     Group,
+    GroupChat,
     GroupMemberRole,
     LoginPhase,
     Message,
@@ -77,6 +79,7 @@ class UiStateStore:
         self.notices = Signal[tuple[ChatNotice, ...]](())
         self.group_roles = Signal[dict[str, GroupMemberRole]]({})
         self.has_older_messages = Signal(False)
+        self.reply_to = Signal[StoredMessage | None](None)
 
     def set_render(self, render: RenderCallback | None) -> None:
         """注入 Neony 渲染回调，由应用组装根调用。"""
@@ -100,6 +103,7 @@ class UiStateStore:
         bus.subscribe(GroupAdminChanged, self._on_group_admin_changed)
         bus.subscribe(GroupMemberMuted, self._on_group_member_muted)
         bus.subscribe(GroupMembersUpdated, self._on_group_members_updated)
+        bus.subscribe(GroupReactionChanged, self._on_group_reaction_changed)
 
     async def load_initial_state(self) -> None:
         """启动时从存储恢复联系人与会话摘要。"""
@@ -250,6 +254,32 @@ class UiStateStore:
         for member in event.members:
             roles[f"{member.group_id}:{member.uid}"] = member.role
         self.group_roles.set(roles)
+
+    async def _on_group_reaction_changed(self, event: GroupReactionChanged) -> None:
+        """持久化群表情事件，并在当前会话可见时更新投影。"""
+        chat = GroupChat(group_id=event.group_id)
+        persisted = await self._storage.messages.apply_group_reaction(
+            chat,
+            event.seq,
+            event.emoji_id,
+            event.emoji_type,
+            event.count,
+            is_increase=event.is_increase,
+            operator_uid=event.operator_uid,
+        )
+        if persisted is None:
+            return
+
+        active_chat = self.active_chat()
+        if active_chat is None or active_chat.key != chat.key:
+            return
+
+        messages = list(self.messages())
+        for index, stored in enumerate(messages):
+            if stored.id == persisted.id:
+                messages[index] = persisted
+                self.messages.set(tuple(messages))
+                return
 
     def _append_notice(self, chat_key: str, text: str, timestamp: int, key: str) -> None:
         notices = list(self.notices())

@@ -93,11 +93,11 @@ class ApplicationRuntime:
         return await self._neony_app.eval_js(script)
 
     async def open_files(
-            self,
-            *,
-            title: str = "打开",
-            default_dir: str | None = None,
-            filetypes: list[tuple[str, str]] | None = None,
+        self,
+        *,
+        title: str = "打开",
+        default_dir: str | None = None,
+        filetypes: list[tuple[str, str]] | None = None,
     ) -> list[str]:
         """打开系统原生多选文件对话框；未挂载应用时返回空列表。"""
         if self._neony_app is None:
@@ -105,12 +105,12 @@ class ApplicationRuntime:
         return await self._neony_app.open_files(title=title, default_dir=default_dir, filetypes=filetypes)
 
     async def save_file(
-            self,
-            *,
-            title: str = "另存为",
-            default_dir: str | None = None,
-            default_name: str | None = None,
-            filetypes: list[tuple[str, str]] | None = None,
+        self,
+        *,
+        title: str = "另存为",
+        default_dir: str | None = None,
+        default_name: str | None = None,
+        filetypes: list[tuple[str, str]] | None = None,
     ) -> str | None:
         """打开系统原生保存文件对话框；未挂载应用时返回 None。"""
         if self._neony_app is None:

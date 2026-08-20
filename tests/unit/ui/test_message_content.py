@@ -220,6 +220,9 @@ def test_quote_uses_background_depth_instead_of_border() -> None:
     assert other_blocks[0].styles.background_color is not None
     assert self_blocks[0].styles.background_color is not None
     assert other_blocks[0].styles.background_color != self_blocks[0].styles.background_color
+    title = other_blocks[0].container[0]
+    assert isinstance(title, Span)
+    assert title.container[0].startswith("10001 · 1970-01-01")
 
 
 def test_image_click_callback_receives_preview() -> None:

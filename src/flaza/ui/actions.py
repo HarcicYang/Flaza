@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Literal
 
 from flaza.config import AppConfig, LoginConfig, save_config
 from flaza.core.models import (
+    AtAllElement,
+    AtElement,
     ChatTarget,
     FileElement,
     FriendChat,
@@ -22,6 +24,7 @@ from flaza.core.models import (
     ImageElement,
     LoginPhase,
     MessageElement,
+    QuoteElement,
     StoredMessage,
     TextElement,
 )
@@ -126,7 +129,10 @@ class UiActions:
         await self._refresh_after_send_safely(chat, state)
 
     async def send_composed_blocks(self, blocks: Sequence[tuple[str, str]]) -> None:
-        """按块顺序发送图文消息；块为 ``("text"|"image", value)``。"""
+        """按块顺序发送图文消息；块为 ``("text"|"image"|"at", value)``。
+
+        ``"at"`` 块的 value 格式为 ``"uid:uin:display_name"``（提及成员）或 ``"__all__"``（@全体成员）。
+        """
         state = self._runtime.state
         chat = state.active_chat()
         if chat is None:
@@ -141,6 +147,61 @@ class UiActions:
             elif kind == "image":
                 if _looks_like_image(value):
                     elements.append(ImageElement(local_path=value))
+            elif kind == "at":
+                if value == "__all__":
+                    elements.append(AtAllElement(text="@全体成员"))
+                elif ":" in value:
+                    parts = value.split(":", 2)
+                    uid = parts[0]
+                    try:
+                        uin = int(parts[1])
+                    except (ValueError, IndexError):
+                        uin = 0
+                    display_name = parts[2] if len(parts) > 2 else str(uin)
+                    elements.append(AtElement(uid=uid, uin=uin, text=f"@{display_name}"))
+
+        if not elements:
+            return
+        await self._message_service().send_message(chat, elements)
+        await self._refresh_after_send_safely(chat, state)
+
+    async def send_reply_message(self, reply_to: StoredMessage, blocks: Sequence[tuple[str, str]]) -> None:
+        """发送一条回复消息，在 blocks 之前插入 QuoteElement。"""
+        state = self._runtime.state
+        chat = state.active_chat()
+        if chat is None:
+            return
+
+        quoted = reply_to.message
+        quote = QuoteElement(
+            seq=quoted.seq,
+            uin=quoted.sender_uin,
+            timestamp=quoted.timestamp,
+            uid=quoted.sender_uid,
+            msg=quoted.text[:200],
+        )
+
+        elements: list[MessageElement] = [quote]
+        for kind, value in blocks:
+            if kind == "text":
+                text = value.strip()
+                if text:
+                    elements.append(TextElement(text=text))
+            elif kind == "image":
+                if _looks_like_image(value):
+                    elements.append(ImageElement(local_path=value))
+            elif kind == "at":
+                if value == "__all__":
+                    elements.append(AtAllElement(text="@全体成员"))
+                elif ":" in value:
+                    parts = value.split(":", 2)
+                    uid = parts[0]
+                    try:
+                        uin = int(parts[1])
+                    except (ValueError, IndexError):
+                        uin = 0
+                    display_name = parts[2] if len(parts) > 2 else str(uin)
+                    elements.append(AtElement(uid=uid, uin=uin, text=f"@{display_name}"))
 
         if not elements:
             return

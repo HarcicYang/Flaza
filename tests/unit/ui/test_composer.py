@@ -1,11 +1,14 @@
 """Composer 行内富文本编辑与粘贴落盘测试。"""
 
+import asyncio
 import base64
 from pathlib import Path
 
 from neony.application.elements import ImageSegment, TextSegment
+from neony.dom import DomEvent
 
 from flaza.config import AppConfig
+from flaza.core.models import GroupMember
 from flaza.runtime import ApplicationRuntime
 from flaza.ui.components.composer import Composer, _data_url_to_tempfile, _mime_from_header
 
@@ -44,6 +47,78 @@ def test_composer_stages_images_inside_editor(tmp_path: Path) -> None:
     assert segments[0].src in composer._image_paths
     assert composer._image_paths[segments[0].src] == str(image)
     assert all(isinstance(segment, (TextSegment, ImageSegment)) for segment in segments)
+
+
+def test_at_completion_ignores_late_keyup_event() -> None:
+    async def render() -> None:
+        return None
+
+    async def scenario() -> None:
+        composer = Composer(ApplicationRuntime(AppConfig()).actions, render)
+        composer.set_group_context(
+            10001,
+            [GroupMember(group_id=10001, uid="u_1", uin=10001, nickname="Alice")],
+        )
+        composer._editor.set_content(["@"])
+        composer._editor.set_caret(1)
+        await composer._on_input(DomEvent(key="editor", type="input"))
+        assert composer._at_active is True
+        assert composer._at_picker is not None
+        assert composer._at_picker.is_open is True
+
+        composer._editor.set_content(["@Al"])
+        composer._editor.set_caret(3)
+        await composer._on_at_member_selected("u_1", 10001, "Alice", "@Alice")
+        await composer._on_input(DomEvent(key="editor", type="input"))
+
+        assert composer._editor.content()[0].text == "@Alice "
+        assert composer._at_active is False
+        assert composer._at_picker is not None
+        assert composer._at_picker.is_open is False
+
+    asyncio.run(scenario())
+
+
+def test_group_context_replaces_mounted_member_picker() -> None:
+    async def render() -> None:
+        return None
+
+    composer = Composer(ApplicationRuntime(AppConfig()).actions, render)
+    first = GroupMember(group_id=10001, uid="u_1", uin=10001, nickname="Alice")
+    second = GroupMember(group_id=10002, uid="u_2", uin=10002, nickname="Bob")
+    composer.set_group_context(10001, [first])
+    first_root = composer._at_picker_el
+    composer.set_group_context(10002, [second])
+
+    assert first_root not in composer.root.container
+    assert composer._at_picker_el is not None
+    assert composer._at_picker_el in composer.root.container
+    assert composer._at_picker is not None
+    assert composer._at_picker.all_items()[0].uid == "u_2"
+
+
+def test_input_space_closes_at_picker_before_submit() -> None:
+    async def render() -> None:
+        return None
+
+    async def scenario() -> None:
+        composer = Composer(ApplicationRuntime(AppConfig()).actions, render)
+        composer.set_group_context(
+            10001,
+            [GroupMember(group_id=10001, uid="u_1", uin=10001, nickname="Alice")],
+        )
+        composer._editor.set_content(["@Alice "])
+        composer._editor.set_caret(7)
+        composer._at_active = True
+        assert composer._at_picker is not None
+        composer._at_picker.show_above()
+
+        await composer._on_input(DomEvent(key="editor", type="input"))
+
+        assert composer._at_active is False
+        assert composer._at_picker.is_open is False
+
+    asyncio.run(scenario())
 
 
 def test_composer_send_blocks_rebuilds_ordered_payload(tmp_path: Path) -> None:

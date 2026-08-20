@@ -19,6 +19,7 @@ from lagrange.client.events.group import (
     GroupMemberQuit,
     GroupMessage,
     GroupMuteMember,
+    GroupReaction,
     GroupRecall,
 )
 from lagrange.client.events.group import (
@@ -32,6 +33,7 @@ from flaza.core.events import (
     GroupAdminChanged,
     GroupMemberMuted,
     GroupNameChanged,
+    GroupReactionChanged,
     MessageRecalled,
     MessageReceived,
 )
@@ -69,6 +71,7 @@ class LagrangeEventAdapter:
         client.events.subscribe(GroupMemberQuit, self._on_group_member_quit)
         client.events.subscribe(GroupAdminChange, self._on_group_admin_change)
         client.events.subscribe(GroupMuteMember, self._on_group_mute_member)
+        client.events.subscribe(GroupReaction, self._on_group_reaction)
         client.events.subscribe(ClientOnline, self._on_client_online)
         client.events.subscribe(ClientOffline, self._on_client_offline)
         client.events.subscribe(ServerKick, self._on_server_kick)
@@ -158,6 +161,24 @@ class LagrangeEventAdapter:
                 timestamp=int(time.time()),
             )
         )
+
+    async def _on_group_reaction(self, _client: Client, event: Any) -> None:
+        try:
+            # emoji_id 是 Unicode code point (int)，需要转为实际字符
+            emoji_char = chr(event.emoji_id) if event.emoji_type == 2 else str(event.emoji_id)
+            self._bus.publish(
+                GroupReactionChanged(
+                    group_id=event.grp_id,
+                    seq=event.seq,
+                    emoji_id=emoji_char,
+                    emoji_type=event.emoji_type,
+                    count=event.emoji_count,
+                    is_increase=event.is_increase,
+                    operator_uid=event.uid,
+                )
+            )
+        except Exception:
+            logger.debug("处理群表情回应事件失败", exc_info=True)
 
     async def _on_group_message(self, client: Client, event: Any) -> None:
         async with self._group_message_lock:

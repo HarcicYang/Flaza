@@ -157,6 +157,18 @@ class ContactsUpdated(FlazaEvent):
     groups: list[Group]
 
 
+class GroupReactionChanged(FlazaEvent):
+    """群消息表情回应变更。"""
+
+    group_id: int
+    seq: int
+    emoji_id: str
+    emoji_type: int
+    count: int
+    is_increase: bool
+    operator_uid: str
+
+
 _E = TypeVar("_E", bound=FlazaEvent)
 EventHandler = Callable[[_E], Awaitable[None]]
 

@@ -13,7 +13,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 from lagrange import Client
 from lagrange.client.message.decoder import parse_friend_msg, parse_grp_msg
-from lagrange.client.message.elems import Text
+from lagrange.client.message.elems import At, AtAll, Quote, Text
 from lagrange.client.wtlogin.enum import QrCodeResult
 from lagrange.info import InfoManager
 from lagrange.info.app import AppInfo, app_list
@@ -26,6 +26,8 @@ from lagrange.utils.sign import sign_provider
 from flaza.config import LoginConfig, PathsConfig
 from flaza.core.events import EventBus
 from flaza.core.models import (
+    AtAllElement,
+    AtElement,
     ChatTarget,
     Friend,
     FriendChat,
@@ -38,6 +40,7 @@ from flaza.core.models import (
     MessageElement,
     QrCodeData,
     QrCodeState,
+    QuoteElement,
     SelfInfo,
     SilentLoginResult,
     TextElement,
@@ -286,6 +289,16 @@ class LagrangeQQClient:
             from_self=True,
         )
 
+    async def send_reaction(self, chat: ChatTarget, seq: int, emoji_id: str, is_cancel: bool = False) -> None:
+        """对消息发送表情回应；仅群聊支持，好友暂不支持。"""
+        client = self._require_client()
+        if isinstance(chat, GroupChat):
+            await client.send_grp_reaction(chat.group_id, seq, emoji_id, is_cancel=is_cancel)
+        elif isinstance(chat, FriendChat):
+            raise NotImplementedError("好友消息暂不支持表情回应")
+        else:
+            raise TypeError(f"未知会话目标: {chat!r}")
+
     async def recall_message(self, target: ChatTarget, seq: int) -> None:
         """撤回自己发送的消息。"""
         client = self._require_client()
@@ -355,6 +368,15 @@ class LagrangeQQClient:
         """把领域元素转换为 lagrange 元素，并返回持久化用的领域元素。"""
         if isinstance(element, TextElement):
             return Text(text=element.text), element
+        if isinstance(element, AtElement):
+            return At(uin=element.uin, uid=element.uid, text=element.text), element
+        if isinstance(element, AtAllElement):
+            return AtAll(text=element.text), element
+        if isinstance(element, QuoteElement):
+            return (
+                Quote(seq=element.seq, uin=element.uin, timestamp=element.timestamp, uid=element.uid, msg=element.msg),
+                element,
+            )
         if isinstance(element, ImageElement) and element.local_path:
             uploaded = await self._upload_image(target, element.local_path)
             if isinstance(target, GroupChat) and getattr(uploaded, "id", 0) == 0:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -126,6 +127,37 @@ _FILE_DOWNLOAD_BUTTON = Styles(
     opacity="0.85",
 )
 
+_REACTIONS_ROW = Styles(
+    display="flex",
+    flex_wrap="wrap",
+    gap="4px",
+    margin_top="6px",
+)
+
+_REACTION = Styles(
+    display="inline-flex",
+    align_items="center",
+    gap="4px",
+    padding="3px 8px 3px 6px",
+    border_radius="12px",
+    background_color=stub.surface_glass_bg,
+    cursor="pointer",
+    font_size="13px",
+    line_height="1",
+)
+
+_REACTION_EMOJI = Styles(
+    font_size="14px",
+    line_height="1",
+)
+
+_REACTION_COUNT = Styles(
+    font_size="11px",
+    color=stub.text_secondary,
+    line_height="1",
+    margin_left="1px",
+)
+
 
 def build_message_content(
     message: Message,
@@ -150,7 +182,30 @@ def build_message_content(
         else:
             children.append(_build_element(element, message.from_self, on_image_click, on_file_download))
             index += 1
+
+    # 添加表情回应显示
+    if message.reactions:
+        reactions_row = _build_reactions(message)
+        if reactions_row is not None:
+            children.append(reactions_row)
+
     return Div(styles=_CONTENT, container=children)
+
+
+def _build_reactions(message: Message) -> DOMElement | None:
+    """渲染消息的表情回应行（表情与计数分开显示，避免混淆）。"""
+    if not message.reactions:
+        return None
+    reaction_els: list[DOMElement] = []
+    for r in message.reactions:
+        if r.count <= 0:
+            continue
+        emoji_span = Span(container=[r.emoji_id], styles=_REACTION_EMOJI)
+        count_span = Span(container=[str(r.count)], styles=_REACTION_COUNT)
+        reaction_els.append(Div(styles=_REACTION, container=[emoji_span, count_span]))
+    if not reaction_els:
+        return None
+    return Div(styles=_REACTIONS_ROW, container=reaction_els)
 
 
 def _build_element(
@@ -343,13 +398,22 @@ def _at_span(text: str, from_self: bool) -> Span:
 
 def _quote(element: QuoteElement, from_self: bool) -> Div:
     styles = _QUOTE_ME if from_self else _QUOTE_OTHER
+    sender = str(element.uin) if element.uin else "未知发送者"
+    timestamp = _format_quote_timestamp(element.timestamp)
+    title = f"{sender} · {timestamp}" if timestamp else sender
     return Div(
         styles=styles,
         container=[
-            Span(container=["回复"], styles=_QUOTE_TITLE),
+            Span(container=[title], styles=_QUOTE_TITLE),
             Span(container=[element.msg or "原消息不可见"], styles=_QUOTE_BODY),
         ],
     )
+
+
+def _format_quote_timestamp(timestamp: int) -> str:
+    if timestamp <= 0:
+        return ""
+    return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
 
 
 def _card(title: str, subtitle: str = "") -> Div:

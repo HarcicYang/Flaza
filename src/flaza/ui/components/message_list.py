@@ -15,6 +15,7 @@ from flaza.core.models import ChatTarget, FileElement, GroupChat, GroupMemberRol
 from flaza.ui.avatars import friend_avatar_url
 from flaza.ui.components.image_viewer import ImagePreview
 from flaza.ui.components.message_content import build_message_content
+from flaza.ui.components.reaction_picker import ReactionPicker
 from flaza.ui.state import ChatNotice, UiStateStore
 
 _BadgeVariant = Literal["accent", "danger", "neutral", "success"]
@@ -44,12 +45,14 @@ class MessageList:
         state: UiStateStore,
         on_image_click: Callable[[ImagePreview], Awaitable[None]] | None = None,
         on_message_action: Callable[[str, StoredMessage], Awaitable[None]] | None = None,
+        on_reaction_selected: Callable[[StoredMessage, str], Awaitable[None]] | None = None,
         on_load_older: Callable[[], Awaitable[None]] | None = None,
         on_file_download: Callable[[FileElement], Awaitable[None]] | None = None,
     ) -> None:
         self._state = state
         self._on_image_click = on_image_click
         self._on_message_action = on_message_action
+        self._on_reaction_selected = on_reaction_selected
         self._on_file_download = on_file_download
         self._loading_older = False
         self._items: dict[str, _RenderedItem] = {}
@@ -309,6 +312,8 @@ class MessageList:
             menu_items.append(("download", "下载文件"))
         if message.from_self:
             menu_items.append(("recall", "撤回"))
+        # 回复按钮通过 hover actions 展示；表情选择器与气泡同树，保证
+        # 刷新重建后仍保留右键菜单和 quick actions 的内部事件路由。
         bubble = MessageBubble(
             text=message.text,
             content=build_message_content(message, self._on_image_click, self._on_file_download),
@@ -316,10 +321,14 @@ class MessageList:
             name=message.sender_name if isinstance(chat, GroupChat) and not message.from_self else None,
             avatar=avatar,
             menu_items=menu_items,
+            actions=[("reply", "💬"), ("reaction", "😊")],
         )
+        stored = item
+        reaction_picker = ReactionPicker(on_select=self._make_reaction_selected_handler(stored))
+        bubble._col.container.append(reaction_picker.root)
         if self._on_message_action is not None:
-            stored = item
             bubble.on_change(self._make_message_action_handler(stored))
+            bubble.on_action(self._make_action_handler(stored, reaction_picker))
         bubble._bubble.styles = bubble._bubble.styles.model_copy(update={"white_space": "pre-wrap"})
         if isinstance(chat, GroupChat) and not message.from_self and role is not GroupMemberRole.MEMBER:
             _MessageListHelpers._append_role_badge(bubble, role)
@@ -331,6 +340,25 @@ class MessageList:
         async def handler(event: DomEvent) -> None:
             if self._on_message_action is not None:
                 await self._on_message_action(str(event.value), stored)
+
+        return handler
+
+    def _make_action_handler(self, stored: StoredMessage, reaction_picker: ReactionPicker):
+        """快速动作按钮的回调（接收纯字符串值，非 DomEvent）。"""
+
+        async def handler(value: str) -> None:
+            if value == "reaction" and isinstance(stored.message.chat, GroupChat):
+                reaction_picker.show_above(from_me=stored.message.from_self)
+                return
+            if self._on_message_action is not None:
+                await self._on_message_action(value, stored)
+
+        return handler
+
+    def _make_reaction_selected_handler(self, stored: StoredMessage):
+        async def handler(emoji: str) -> None:
+            if self._on_reaction_selected is not None:
+                await self._on_reaction_selected(stored, emoji)
 
         return handler
 

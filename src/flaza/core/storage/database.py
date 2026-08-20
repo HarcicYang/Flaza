@@ -73,6 +73,17 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_chat_time
     ON messages (chat_kind, chat_id, timestamp DESC, id DESC);
 
+CREATE TABLE IF NOT EXISTS pending_group_reactions (
+    group_id     INTEGER NOT NULL,
+    seq          INTEGER NOT NULL,
+    emoji_id     TEXT NOT NULL,
+    emoji_type   INTEGER NOT NULL,
+    count        INTEGER NOT NULL,
+    is_increase  INTEGER NOT NULL,
+    operator_uid TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (group_id, seq, emoji_id, emoji_type)
+);
+
 DROP VIEW IF EXISTS session_stats;
 CREATE VIEW session_stats AS
 SELECT
