@@ -5,7 +5,7 @@ import asyncio
 from neony.dom import DOMElement, DomEvent
 
 from flaza.config import AppConfig
-from flaza.core.models import FriendChat, Message, Session, StoredMessage, TextElement
+from flaza.core.models import FriendChat, Message, Session, StoredMessage, TextElement, VideoElement
 from flaza.runtime import ApplicationRuntime
 from flaza.ui.components.message_list import MessageList
 from flaza.ui.components.session_list import SessionList
@@ -97,6 +97,26 @@ def test_message_list_appends_new_message_without_rebuilding() -> None:
     assert len(messages.root.container) == 3
     assert messages.root.container[0] is old_els[0]
     assert messages.root.container[1] is old_els[1]
+
+
+def test_message_list_keeps_bubble_when_only_media_cache_changes() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    chat = FriendChat(uid="u_1", uin=10001)
+    video = VideoElement(url="https://example.com/v.mp4", file_key="k")
+    stored = StoredMessage(
+        id=1,
+        message=Message(chat=chat, sender_uin=chat.uin, sender_uid=chat.uid, seq=1, timestamp=1, elements=[video]),
+    )
+    messages.set_messages(chat, (stored,))
+    bubble_before = messages.root.container[0]
+
+    cached_video = video.model_copy(update={"cached_path": "/tmp/v.mp4"})
+    cached = StoredMessage(id=1, message=stored.message.model_copy(update={"elements": [cached_video]}))
+    messages.set_messages(chat, (cached,))
+
+    assert messages.root.container[0] is bubble_before
+    assert messages._items["message:1"].message == cached.message
 
 
 def test_message_list_prepends_older_messages_without_rebuilding() -> None:

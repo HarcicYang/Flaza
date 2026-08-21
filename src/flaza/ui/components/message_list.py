@@ -248,6 +248,17 @@ class MessageList:
                 and entry.avatar_src == desired_avatar
             ):
                 continue
+            # 仅媒体缓存路径变化时原地更新模型，不重建气泡：后台下载完成
+            # 常发生在用户正在观看时，替换节点会打断视频/语音播放。
+            if (
+                entry.kind == "message"
+                and entry.message is not None
+                and entry.role == desired_role
+                and entry.avatar_src == desired_avatar
+                and _strip_media_cache(entry.message) == _strip_media_cache(message)
+            ):
+                entry.message = message
+                continue
             # 仅 reactions 变化时只重建内容元素，保留气泡根节点的事件处理器
             if (
                 entry.kind == "message"
@@ -479,6 +490,15 @@ class MessageList:
 
 def _timeline_sort_key(entry: tuple[int, int, int, StoredMessage | ChatNotice]) -> tuple[int, int, int]:
     return entry[:3]
+
+
+def _strip_media_cache(message: Message) -> Message:
+    """去掉元素上的本地缓存路径，用于识别“仅媒体缓存变化”的消息更新。"""
+    elements = tuple(
+        element.model_copy(update={"cached_path": ""}) if getattr(element, "cached_path", "") else element
+        for element in message.elements
+    )
+    return message.model_copy(update={"elements": elements})
 
 
 class _MessageListHelpers:
