@@ -311,10 +311,6 @@ class UiActions:
         if text:
             await self._runtime.clipboard_write(text)
 
-    async def read_clipboard(self) -> bytes | str:
-        """读取系统剪贴板，供输入框粘贴图片使用。"""
-        return await self._runtime.clipboard_read()
-
     async def download_file(self, file: FileElement) -> str | None:
         """弹出保存对话框并下载文件；返回保存路径，取消时返回 None。"""
         if not file.file_url:

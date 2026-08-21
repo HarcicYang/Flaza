@@ -6,7 +6,6 @@ import asyncio
 import base64
 import binascii
 import contextlib
-import logging
 import mimetypes
 import os
 import tempfile
@@ -23,8 +22,6 @@ from neony.dom import Color, Div, DOMElement, DomEvent, Span, Styles
 from flaza.core.models import GroupMember, StoredMessage
 from flaza.ui.actions import UiActions
 from flaza.ui.components.member_picker import MemberPicker
-
-logger = logging.getLogger(__name__)
 
 ErrorHandler = Callable[[str], Awaitable[None]]
 
@@ -116,7 +113,6 @@ class Composer:
         self._on_error = on_error
         # 编辑器里展示的是 data URL 缩略图；发送时要还原为本地路径。
         self._image_paths: dict[str, str] = {}
-        self._paste_image_task: asyncio.Task[None] | None = None
         # @ 提及状态
         self._at_group_id: int | None = None
         self._at_picker: MemberPicker | None = None
@@ -130,7 +126,7 @@ class Composer:
 
         self._editor = RichText(placeholder="输入消息…")
         self._editor.on_submit(self._on_submit)
-        self._editor.on("paste", self._on_paste)
+        self._editor.on_change(self._on_editor_change)
         self._editor.on_paste_image(self._on_paste_image)
         self._editor.on_paste_files(self._on_paste_files)
         self._editor.on("input", self._on_input)
@@ -252,29 +248,6 @@ class Composer:
             src = _thumb_data_url(path)
             self._image_paths[src] = path
             self._editor.insert_image(src, at_caret=True, alt=Path(path).name)
-
-    def _replace_blob_images(self, paths: list[str]) -> None:
-        """以已落盘的图片替换浏览器自动插入的 blob 图片段。"""
-        pending = iter(paths)
-        rebuilt: list[RichSegment] = []
-        for segment in self._editor.content():
-            if isinstance(segment, ImageSegment) and segment.src.startswith("blob:"):
-                path = next(pending, None)
-                if path is None:
-                    rebuilt.append(segment)
-                    continue
-                src = _thumb_data_url(path)
-                self._image_paths[src] = path
-                rebuilt.append(ImageSegment(src=src, alt=path))
-            else:
-                rebuilt.append(segment)
-        # Neony 已为剪贴板文件提供了本地路径，但在某些 WebKitGTK 版本
-        # 中并未把图片插入内容区；该情况下把图片追加到编辑器末尾。
-        for path in pending:
-            src = _thumb_data_url(path)
-            self._image_paths[src] = path
-            rebuilt.append(ImageSegment(src=src, alt=path))
-        self._editor.set_content(rebuilt)
 
     # ---- 发送 ----
 
@@ -501,35 +474,23 @@ class Composer:
         elif event.value == "file":
             await self._send_files()
 
-    async def _on_paste(self, _event: DomEvent) -> None:
-        """从系统剪贴板读取没有本地文件路径的截图图片。"""
-        if self._paste_image_task is not None and not self._paste_image_task.done():
-            return
-        self._paste_image_task = asyncio.create_task(self._stage_clipboard_image())
-
-    async def _stage_clipboard_image(self) -> None:
-        try:
-            content = await self._actions.read_clipboard()
-            if not isinstance(content, bytes):
-                return
-            suffix = _suffix_for_bytes(content)
-            if suffix == ".bin":
-                return
-            path = await asyncio.to_thread(_bytes_to_tempfile, content, suffix)
-            await asyncio.sleep(0)
-            self._replace_blob_images([path])
-            await self._render()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("读取剪贴板图片失败")
+    async def _on_editor_change(self, event: DomEvent) -> None:
+        """登记 Neony 完成粘贴替换后的 data URL 图片。"""
+        for segment in event.value or []:
+            if not isinstance(segment, ImageSegment) or not segment.src.startswith("data:image/"):
+                continue
+            if segment.src in self._image_paths:
+                continue
+            path = await asyncio.to_thread(_data_url_to_tempfile, segment.src, segment.alt)
+            if path:
+                self._image_paths[segment.src] = path
 
     async def _on_paste_image(self, event: DomEvent) -> None:
         paths = [path for path in (event.value or []) if self._actions.is_image_path(path)]
         if paths:
-            if self._paste_image_task is not None and not self._paste_image_task.done():
-                self._paste_image_task.cancel()
-            self._replace_blob_images(paths)
+            for path in paths:
+                src = _thumb_data_url(path)
+                self._image_paths[src] = path
             await self._render()
 
     async def _on_paste_files(self, event: DomEvent) -> None:
