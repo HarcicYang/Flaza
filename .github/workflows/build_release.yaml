@@ -1,0 +1,241 @@
+name: Build & Release (Nuitka)
+
+on:
+  push:
+    branches: [master, main]
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (defaults to pyproject.toml)'
+        required: false
+        type: string
+      branch:
+        description: 'Branch to build'
+        required: false
+        default: 'master'
+        type: choice
+        options:
+          - master
+          - main
+      fail_if_no_release:
+        description: 'Fail the job if no matching release exists'
+        required: false
+        default: false
+        type: boolean
+      match_version:
+        description: 'Only attach to a release whose version matches'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Nuitka ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            arch: x64
+            runner: ubuntu-latest
+            output_dir: dist/nuitka/linux-x64
+
+          - platform: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            output_dir: dist/nuitka/linux-arm64
+
+          - platform: macos
+            arch: arm64
+            runner: macos-14
+            output_dir: dist/nuitka/macos-arm64
+
+          - platform: windows
+            arch: x64
+            runner: windows-latest
+            output_dir: dist/nuitka/windows-x64
+
+          - platform: windows
+            arch: arm64
+            runner: windows-11-arm
+            output_dir: dist/nuitka/windows-arm64
+
+    env:
+      VERSION: ''
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch || github.ref }}
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install WebKitGTK (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev
+
+      - name: Install OpenSSL (Windows ARM64)
+        if: matrix.platform == 'windows' && matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          vcpkg install openssl:arm64-windows
+          "OPENSSL_DIR=C:\vcpkg\installed\arm64-windows" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "OpenSSL installed at C:\vcpkg\installed\arm64-windows"
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          INPUT_VERSION="${{ inputs.version || '' }}"
+
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+          fi
+
+          VERSION="${VERSION#v}"
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Resolved version: $VERSION"
+
+      - name: Compile with Nuitka
+        shell: bash
+        run: |
+          uv sync --frozen --group dev
+
+          EXTRA_ARGS=()
+
+          if [ "${{ matrix.platform }}" = "macos" ]; then
+            EXTRA_ARGS+=("--macos-create-app-bundle")
+          fi
+
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            EXTRA_ARGS+=("--windows-console-mode=disable")
+          fi
+
+          uv run python -m nuitka main.py \
+            --onefile \
+            --output-filename="flaza-$VERSION" \
+            --output-dir="${{ matrix.output_dir }}" \
+            --include-package-data=neony \
+            --assume-yes-for-downloads \
+            --disable-ccache \
+            --lto=no \
+            "${EXTRA_ARGS[@]}"
+
+      - name: Package macOS app bundle
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          cd "${{ matrix.output_dir }}"
+
+          if [ -d "flaza-${VERSION}.app" ]; then
+            zip -r \
+              "flaza-${VERSION}-${{ matrix.platform }}-${{ matrix.arch }}.app.zip" \
+              "flaza-${VERSION}.app"
+
+            rm -rf "flaza-${VERSION}.app"
+          fi
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaza-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.run_id }}
+          path: ${{ matrix.output_dir }}
+
+      - name: Locate release to attach to
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          EVENT="${{ github.event_name }}"
+          VERSION="${{ env.VERSION }}"
+
+          FAIL_IF_NONE="${{ inputs.fail_if_no_release || 'false' }}"
+          MATCH_VERSION="${{ inputs.match_version || 'true' }}"
+
+          RELEASE_ID=""
+
+          if [ "$EVENT" = "release" ]; then
+            RELEASE_ID="${{ github.event.release.id }}"
+          else
+            while read -r TAG DRAFT NAME; do
+
+              if [ "$MATCH_VERSION" = "true" ]; then
+                if [ "$TAG" != "v$VERSION" ] && [ "$TAG" != "$VERSION" ]; then
+                  continue
+                fi
+              fi
+
+              RELEASE_ID="$(gh release view "$TAG" --json id --jq .id)"
+              echo "Attaching to release: $TAG (id=$RELEASE_ID)"
+              break
+
+            done < <(
+              gh release list \
+                --limit 100 \
+                --json tagName,isDraft,name \
+                --jq '.[] | "\(.tagName)\t\(.isDraft)\t\(.name)"'
+            )
+          fi
+
+          if [ -z "$RELEASE_ID" ]; then
+            echo "No matching release found"
+
+            if [ "$FAIL_IF_NONE" = "true" ]; then
+              exit 1
+            fi
+
+            echo "release_found=false" >> "$GITHUB_OUTPUT"
+
+          else
+
+            echo "release_found=true" >> "$GITHUB_OUTPUT"
+            echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+
+          fi
+
+      - name: Attach assets to release
+        if: steps.release.outputs.release_found == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          RELEASE_ID="${{ steps.release.outputs.release_id }}"
+
+          cd "${{ matrix.output_dir }}"
+
+          for ASSET in *; do
+
+            [ -e "$ASSET" ] || continue
+
+            echo "Uploading $ASSET"
+
+            gh release upload \
+              "$RELEASE_ID" \
+              "$ASSET" \
+              --clobber
+
+          done
