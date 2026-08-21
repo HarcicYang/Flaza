@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 
 from neony.application import icons
 from neony.application.elements import Button, Icon, Text, TitleBar
 from neony.application.theme import stub
-from neony.dom import Color, Computed, Div, DOMElement, DomEvent, Styles
+from neony.dom import Animation, Color, Computed, Div, DOMElement, DomEvent, Styles
 
 from flaza.config import AppConfig
 from flaza.core.events import EventBus, LoginPhaseChanged
@@ -20,7 +21,29 @@ from flaza.ui.pages.settings import SettingsPage
 from flaza.ui.pages.setup import SetupPage
 from flaza.ui.state import UiStateStore
 
-_TOOLBAR = Styles(display="flex", align_items="center", gap="6px", flex_shrink="0")
+_TOOLBAR = Styles(
+    display="flex",
+    align_items="center",
+    gap="6px",
+    flex_shrink="0",
+    margin_left="14px",
+)
+
+_STATE_DOT = Styles(
+    width="8px",
+    height="8px",
+    border_radius="50%",
+    flex_shrink="0",
+    background_color=Color(hex="#8e8e93"),
+)
+
+_STATE_DOT_COLORS = {
+    "online": Color(hex="#30d158"),
+    "connecting": Color(hex="#ffd60a"),
+    "reconnecting": Color(hex="#ffd60a"),
+    "offline": Color(hex="#ff453a"),
+    "kicked": Color(hex="#ff453a"),
+}
 
 _ICON_BUTTON = Styles(
     display="flex",
@@ -73,8 +96,22 @@ class ShellView:
 
         uin = Text("", role="secondary")
         uin.bind_text(state.self_info, fmt=lambda info: str(info.uin) if info is not None and info.uin else "")
-        connection = Text("", role="secondary")
-        connection.bind_text(state.connection_state, fmt=lambda value: f"连接：{value.value}")
+        connection = Div(styles=_STATE_DOT)
+        connection.bind_style(
+            state.connection_state,
+            "background_color",
+            fmt=lambda value: _STATE_DOT_COLORS.get(value.value, Color(hex="#8e8e93")),
+        )
+        connection.bind_attr(
+            state.connection_state,
+            "title",
+            fmt=lambda value: f"连接：{value.value}",
+        )
+        connection.bind_attr(
+            state.connection_state,
+            "aria-label",
+            fmt=lambda value: f"连接：{value.value}",
+        )
 
         spacer = Div(styles=Styles(flex_grow="1"))
         self._toolbar = Div(styles=_TOOLBAR)
@@ -112,7 +149,7 @@ class ShellView:
             left.container.insert(2, uin_el)
         else:
             left.container.append(uin_el)
-        left.container.extend([spacer, connection.build(), self._toolbar])
+        left.container.extend([spacer, connection, self._toolbar])
 
         self._content = Div(
             styles=Styles(display="flex", flex_direction="column", flex_grow="1", min_height="0", overflow="hidden")
@@ -158,6 +195,15 @@ class ShellView:
         await self._render()
 
     async def _close_settings(self) -> None:
+        # 先播退场动画，播完再切回原页面。
+        if self._screen == "settings" and self._content.container:
+            current = self._content.container[0]
+            if isinstance(current, DOMElement):
+                current.styles = current.styles.model_copy(
+                    update={"animation": Animation(name="flaza-page-out", duration="0.16s", timing="ease-in")}
+                )
+                await self._render()
+                await asyncio.sleep(0.16)
         if getattr(self, "_settings_return_screen", "main") == "login":
             self._screen = "login"
             self._mount(LoginPage(self._state, self._actions, self._config, self._render, self._open_settings).root)

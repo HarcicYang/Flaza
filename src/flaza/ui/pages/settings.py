@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 from neony.application.elements import Button, CascadingDropdown, Heading, MenuBranch, Text, VStack
-from neony.dom import Div, DomEvent, Styles
+from neony.dom import Animation, Div, DomEvent, Styles
 
 from flaza.config import LoginConfig, ThemeName, WindowSettings
 from flaza.ui.actions import UiActions
@@ -83,6 +83,7 @@ class SettingsPage:
                 display="block",
                 padding="24px",
                 overflow_y="auto",
+                animation=Animation(name="flaza-page-in", duration="0.22s", timing="ease-out"),
             ),
             container=[panel],
         )

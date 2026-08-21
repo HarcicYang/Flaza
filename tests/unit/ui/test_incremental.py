@@ -5,7 +5,7 @@ import asyncio
 from neony.dom import DOMElement, DomEvent
 
 from flaza.config import AppConfig
-from flaza.core.models import FriendChat, Message, Session, StoredMessage, TextElement, VideoElement
+from flaza.core.models import FriendChat, GroupChat, Message, Session, StoredMessage, TextElement, VideoElement
 from flaza.runtime import ApplicationRuntime
 from flaza.ui.components.message_list import MessageList
 from flaza.ui.components.session_list import SessionList
@@ -15,6 +15,16 @@ from flaza.ui.state import ChatNotice, UiStateStore
 def _runtime_state() -> tuple[ApplicationRuntime, UiStateStore]:
     runtime = ApplicationRuntime(AppConfig())
     return runtime, runtime.state
+
+
+def _element_text(element: DOMElement) -> str:
+    parts: list[str] = []
+    for child in element.container:
+        if isinstance(child, str):
+            parts.append(child)
+        else:
+            parts.append(_element_text(child))
+    return "".join(parts)
 
 
 def test_session_list_reuses_rows_on_repeated_set() -> None:
@@ -80,6 +90,23 @@ def _message(chat: FriendChat, seq: int, text: str, local_id: int) -> StoredMess
             seq=seq,
             timestamp=seq,
             elements=[TextElement(text=text)],
+        ),
+    )
+
+
+def _group_message(seq: int, text: str, local_id: int, *, from_self: bool = False) -> StoredMessage:
+    chat = GroupChat(group_id=10001)
+    return StoredMessage(
+        id=local_id,
+        message=Message(
+            chat=chat,
+            sender_uin=10002,
+            sender_uid="u_2",
+            sender_name="张三",
+            seq=seq,
+            timestamp=seq,
+            elements=[TextElement(text=text)],
+            from_self=from_self,
         ),
     )
 
@@ -234,3 +261,96 @@ def test_message_list_replaces_recalled_item_in_place() -> None:
     assert len(messages.root.container) == 2
     assert messages.root.container[0] is not first_el
     assert messages.root.container[1] is second_el
+
+
+def test_recalled_notice_names_sender() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    stored = _group_message(1, "一", 1)
+    recalled = (StoredMessage(id=1, message=stored.message.model_copy(update={"recalled": True})),)
+    messages.set_messages(stored.message.chat, recalled)
+    notice = messages.root.container[0]
+    assert isinstance(notice, DOMElement)
+    assert _element_text(notice) == "张三 撤回了一条消息"
+
+
+def test_recalled_notice_uses_you_for_self_messages() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    stored = _group_message(1, "一", 1, from_self=True)
+    recalled = (StoredMessage(id=1, message=stored.message.model_copy(update={"recalled": True})),)
+    messages.set_messages(stored.message.chat, recalled)
+    notice = messages.root.container[0]
+    assert isinstance(notice, DOMElement)
+    assert _element_text(notice) == "你撤回了一条消息"
+
+
+def test_jump_button_follows_scroll_state() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    assert messages.jump_button.styles.display == "none"
+
+    scrolled_up = DomEvent(key="message-list", type="scroll", scroll_top=0, client_height=400, scroll_height=1200)
+    asyncio.run(messages._on_scroll_at_bottom(scrolled_up))
+    assert messages.at_bottom() is False
+    assert messages.jump_button.styles.display == "flex"
+
+    back_to_bottom = DomEvent(key="message-list", type="scroll", scroll_top=1100, client_height=400, scroll_height=1200)
+    asyncio.run(messages._on_scroll_at_bottom(back_to_bottom))
+    assert messages.at_bottom() is True
+    assert messages.jump_button.styles.display == "none"
+
+
+def test_quick_actions_float_beside_bubble() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    stored = _group_message(1, "你好", 1)
+    mine = _group_message(2, "收到", 2, from_self=True)
+    messages.set_messages(stored.message.chat, (stored, mine))
+
+    other_styles = messages._items["message:1"].bubble._actions.styles
+    assert other_styles is not None
+    assert other_styles.top == "50%"
+    assert other_styles.transform == "translateY(-50%)"
+    assert other_styles.left == "calc(100% + 6px)"
+    assert other_styles.right is None
+
+    mine_styles = messages._items["message:2"].bubble._actions.styles
+    assert mine_styles is not None
+    assert mine_styles.right == "calc(100% + 6px)"
+    assert mine_styles.left is None
+
+
+def test_quick_actions_use_icon_values_and_map_to_reply_reaction() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    stored = _group_message(1, "你好", 1)
+    messages.set_messages(stored.message.chat, (stored,))
+    entry = messages._items["message:1"]
+    assert entry.bubble is not None
+    assert set(entry.bubble._action_by_key.values()) == {"chat", "favorite"}
+
+    async def scenario() -> None:
+        captured: list[str] = []
+
+        async def on_action(value: str, item: StoredMessage) -> None:
+            captured.append(value)
+
+        friend_stored = _message(FriendChat(uid="u_9", uin=10009), 1, "hi", 1)
+        friend_list = MessageList(state, on_message_action=on_action)
+        friend_list.set_messages(friend_stored.message.chat, (friend_stored,))
+        handler = friend_list._make_action_handler(friend_stored, _reaction_picker())
+        await handler("chat")
+        await handler("favorite")
+        assert captured == ["reply", "reaction"]
+
+    asyncio.run(scenario())
+
+
+def _reaction_picker():
+    from flaza.ui.components.reaction_picker import ReactionPicker
+
+    async def on_select(emoji: str) -> None:
+        return None
+
+    return ReactionPicker(on_select=on_select)

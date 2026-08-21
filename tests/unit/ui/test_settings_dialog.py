@@ -70,3 +70,29 @@ def test_save_theme_returns_to_previous_page(monkeypatch: pytest.MonkeyPatch) ->
         assert closed is True
 
     asyncio.run(scenario())
+
+
+def test_settings_page_mounts_with_open_animation() -> None:
+    runtime = ApplicationRuntime(AppConfig())
+    page = _settings_page(runtime)
+
+    animation = page.root.styles.animation
+    assert animation is not None
+    assert animation.name == "flaza-page-in"
+    assert animation.duration == "0.22s"
+
+
+def test_register_page_keyframes_registers_in_and_out() -> None:
+    from flaza.app import register_page_keyframes
+
+    class _FakeApp:
+        def __init__(self) -> None:
+            self.names: list[str] = []
+
+        def register_keyframe(self, kf) -> "_FakeApp":
+            self.names.append(kf.name)
+            return self
+
+    fake = _FakeApp()
+    register_page_keyframes(fake)  # type: ignore[arg-type]
+    assert fake.names == ["flaza-page-in", "flaza-page-out"]

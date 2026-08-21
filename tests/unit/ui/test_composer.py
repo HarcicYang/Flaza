@@ -8,7 +8,7 @@ from neony.application.elements import ImageSegment, TextSegment
 from neony.dom import DomEvent
 
 from flaza.config import AppConfig
-from flaza.core.models import GroupMember
+from flaza.core.models import FriendChat, GroupMember, Message, StoredMessage, TextElement
 from flaza.runtime import ApplicationRuntime
 from flaza.ui.components.composer import Composer, _data_url_to_tempfile, _mime_from_header
 
@@ -149,3 +149,74 @@ def test_composer_send_blocks_rebuilds_ordered_payload(tmp_path: Path) -> None:
     blocks = composer._editor.content()
     assert isinstance(blocks[0], TextSegment)
     assert isinstance(blocks[1], ImageSegment)
+
+
+def test_switch_chat_saves_and_restores_text_draft() -> None:
+    async def render() -> None:
+        return None
+
+    composer = Composer(ApplicationRuntime(AppConfig()).actions, render)
+    composer.switch_chat("friend:u_1")
+    composer._editor.set_content(["你好"])
+    composer._editor.set_caret(2)
+
+    composer.switch_chat("friend:u_2")
+    assert composer._editor.content() == []
+    assert composer._editor.caret_position() == 0
+
+    composer._editor.set_content(["别的会话"])
+    composer.switch_chat("friend:u_1")
+    segments = composer._editor.content()
+    assert len(segments) == 1
+    assert isinstance(segments[0], TextSegment)
+    assert segments[0].text == "你好"
+    assert composer._editor.caret_position() == 2
+
+
+def test_switch_chat_preserves_staged_image_draft(tmp_path: Path) -> None:
+    image = tmp_path / "pic.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    async def render() -> None:
+        return None
+
+    composer = Composer(ApplicationRuntime(AppConfig()).actions, render)
+    composer.switch_chat("group:10001")
+    composer.stage_images([str(image)])
+    src = next(iter(composer._image_paths))
+
+    composer.switch_chat("friend:u_1")
+    assert composer._editor.content() == []
+    assert composer._image_paths == {}
+
+    composer.switch_chat("group:10001")
+    segments = composer._editor.content()
+    assert len(segments) == 1
+    assert isinstance(segments[0], ImageSegment)
+    assert segments[0].src == src
+    assert composer._image_paths[src] == str(image)
+
+
+def test_switch_chat_clears_reply_reference() -> None:
+    async def render() -> None:
+        return None
+
+    composer = Composer(ApplicationRuntime(AppConfig()).actions, render)
+    chat = FriendChat(uid="u_1", uin=10001)
+    stored = StoredMessage(
+        id=1,
+        message=Message(
+            chat=chat,
+            sender_uin=10001,
+            sender_uid="u_1",
+            seq=1,
+            timestamp=1,
+            elements=[TextElement(text="hi")],
+        ),
+    )
+    composer.set_reply_to(stored)
+    assert composer._reply_to is not None
+
+    composer.switch_chat("friend:u_2")
+    assert composer._reply_to is None
+    assert composer._reply_bar_el is None

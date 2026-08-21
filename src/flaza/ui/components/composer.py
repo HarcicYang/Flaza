@@ -113,6 +113,9 @@ class Composer:
         self._on_error = on_error
         # 编辑器里展示的是 data URL 缩略图；发送时要还原为本地路径。
         self._image_paths: dict[str, str] = {}
+        # 会话草稿：切换会话时保存/恢复输入内容，避免误发到其他会话。
+        self._chat_key: str | None = None
+        self._drafts: dict[str, tuple[list[RichSegment], dict[str, str]]] = {}
         # @ 提及状态
         self._at_group_id: int | None = None
         self._at_picker: MemberPicker | None = None
@@ -248,6 +251,26 @@ class Composer:
             src = _thumb_data_url(path)
             self._image_paths[src] = path
             self._editor.insert_image(src, at_caret=True, alt=Path(path).name)
+
+    # ---- 会话草稿 ----
+
+    def switch_chat(self, chat_key: str | None) -> None:
+        """切换会话：保存当前草稿，恢复目标会话草稿，并重置回复与 @ 状态。"""
+        if chat_key == self._chat_key:
+            return
+        if self._chat_key is not None:
+            self._drafts[self._chat_key] = (self._editor.content(), dict(self._image_paths))
+        self._chat_key = chat_key
+        self.set_reply_to(None)
+        self._close_picker()
+        draft = self._drafts.pop(chat_key, None) if chat_key is not None else None
+        segments = draft[0] if draft is not None else []
+        self._image_paths.clear()
+        if draft is not None:
+            self._image_paths.update(draft[1])
+        self._editor.set_content(segments)
+        flat = sum(len(seg.text) if isinstance(seg, TextSegment) else 1 for seg in segments)
+        self._editor.set_caret(flat)
 
     # ---- 发送 ----
 

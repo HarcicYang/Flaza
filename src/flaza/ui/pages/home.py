@@ -64,6 +64,15 @@ _DROP_HINT_CARD = Styles(
     box_shadow="0 16px 48px var(--color-shadow)",
 )
 
+_LIST_WRAPPER = Styles(
+    position="relative",
+    display="flex",
+    flex_direction="column",
+    flex_grow="1",
+    flex_basis="0",
+    min_height="0",
+)
+
 _SYNC_FLOAT = Styles(
     display="flex",
     flex_direction="column",
@@ -136,10 +145,11 @@ class HomePage:
         )
         drop_hint.bind_visible(self._dragging_files)
 
-        right = Div(
-            styles=_RIGHT,
-            container=[chat_header, self.message_list.root, self.composer.root],
+        list_wrapper = Div(
+            styles=_LIST_WRAPPER,
+            container=[self.message_list.root, self.message_list.jump_button],
         )
+        right = Div(styles=_RIGHT, container=[chat_header, list_wrapper, self.composer.root])
         body = Div(styles=_BODY, container=[self.session_list.root, right])
         self.root = Div(
             styles=Styles(display="flex", flex_direction="column", width="100%", flex_grow="1", min_height="0"),
@@ -331,7 +341,8 @@ class HomePage:
         await self._update_composer_context(chat)
 
     async def _update_composer_context(self, chat: ChatTarget) -> None:
-        """根据当前会话更新 Composer 的群成员上下文。"""
+        """根据当前会话更新 Composer 的草稿与群成员上下文。"""
+        self.composer.switch_chat(chat.key)
         if isinstance(chat, GroupChat):
             try:
                 members = await self._actions._runtime.storage.members.list_by_group(chat.group_id)

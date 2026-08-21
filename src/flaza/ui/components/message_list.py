@@ -7,9 +7,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from neony.application.elements import Avatar, Badge, MessageBubble, NoticeBubble, StickToBottom
+from neony.application import icons
+from neony.application.elements import Avatar, Badge, Button, MessageBubble, NoticeBubble, StickToBottom
 from neony.application.theme import stub
-from neony.dom import DOMElement, DomEvent, Span, Styles
+from neony.dom import Border, Computed, DOMElement, DomEvent, Signal, Span, Styles, Transition
 
 from flaza.core.models import ChatTarget, FileElement, GroupChat, GroupMemberRole, Message, StoredMessage
 from flaza.ui.avatars import friend_avatar_url
@@ -25,6 +26,31 @@ _ROLE_BADGE: dict[GroupMemberRole, tuple[str, _BadgeVariant]] = {
     GroupMemberRole.ADMIN: ("管理员", "success"),
     GroupMemberRole.BOT: ("机器人", "neutral"),
 }
+
+# 悬停快捷动作：图标即动作（value 取图标 ligature 名）。
+_ACTION_VALUES = {"chat": "reply", "favorite": "reaction"}
+
+# 与 home.py 的同步进度浮层/拖放提示卡同一套毛玻璃令牌，保持悬浮元素观感一致。
+_JUMP_BUTTON = Styles(
+    position="absolute",
+    right="18px",
+    bottom="18px",
+    width="40px",
+    height="40px",
+    padding="0",
+    border_radius="50%",
+    border=Border(width="1px", color=stub.border_glass),
+    background_color=stub.surface_glass_bg,
+    backdrop_filter="blur(20px) saturate(1.2)",
+    box_shadow="0 12px 40px var(--color-shadow)",
+    z_index="900",
+    color=stub.text_primary,
+    display="flex",
+    align_items="center",
+    justify_content="center",
+    transition=Transition(duration="0.15s", timing="ease"),
+    cursor="pointer",
+)
 
 
 @dataclass
@@ -70,6 +96,16 @@ class MessageList:
         self.root.bubble_events = True
         if on_load_older is not None:
             self.root.on_scroll(self._make_scroll_handler(on_load_older))
+        self.root.on("scroll", self._on_scroll_at_bottom)
+
+        # 贴底状态驱动"回到底部"悬浮按钮（毛玻璃样式，hover/按压反馈由 Button 提供）。
+        self.at_bottom = Signal(True)
+        jump = Button("", variant="ghost", icon=icons.arrow_downward).reset_styles(_JUMP_BUTTON)
+        jump.on_click(self._on_jump_click)
+        self.jump_button = jump.build()
+        self.jump_button.args["title"] = "回到底部"
+        self.jump_button.args["aria-label"] = "回到底部"
+        self.jump_button.bind_visible(Computed(lambda: not self.at_bottom()))
 
     def set_messages(
         self,
@@ -333,7 +369,12 @@ class MessageList:
 
         message = item.message
         if message.recalled:
-            element = NoticeBubble("撤回了一条消息").build()
+            if message.from_self:
+                recalled_text = "你撤回了一条消息"
+            else:
+                recalled_name = message.sender_name or str(message.sender_uin)
+                recalled_text = f"{recalled_name} 撤回了一条消息"
+            element = NoticeBubble(recalled_text).build()
             element.key = f"message:{item.id}"
             return element, "recalled", message, GroupMemberRole.MEMBER, None, None
 
@@ -378,7 +419,17 @@ class MessageList:
             name=message.sender_name if isinstance(chat, GroupChat) and not message.from_self else None,
             avatar=avatar,
             menu_items=menu_items,
-            actions=[("reply", "💬"), ("reaction", "😊")],
+            actions=[icons.chat, icons.favorite],
+        )
+        # 动作行悬浮到气泡侧面的空白槽（他人的消息在右、自己的在左），
+        # 垂直居中且始终落在本行高度内，避免悬停时遮挡下方消息。
+        bubble._actions.styles = bubble._actions.styles.model_copy(
+            update={
+                "top": "50%",
+                "transform": "translateY(-50%)",
+                "left": None if message.from_self else "calc(100% + 6px)",
+                "right": "calc(100% + 6px)" if message.from_self else None,
+            }
         )
         reaction_picker = ReactionPicker(on_select=self._make_reaction_selected_handler(stored))
         bubble._col.container.append(reaction_picker.root)
@@ -403,11 +454,12 @@ class MessageList:
         """快速动作按钮的回调（接收纯字符串值，非 DomEvent）。"""
 
         async def handler(value: str) -> None:
-            if value == "reaction" and isinstance(stored.message.chat, GroupChat):
+            action = _ACTION_VALUES.get(value, value)
+            if action == "reaction" and isinstance(stored.message.chat, GroupChat):
                 reaction_picker.show_above(from_me=stored.message.from_self)
                 return
             if self._on_message_action is not None:
-                await self._on_message_action(value, stored)
+                await self._on_message_action(action, stored)
 
         return handler
 
@@ -451,6 +503,20 @@ class MessageList:
                 self._loading_older = False
 
         return handler
+
+    async def _on_scroll_at_bottom(self, event: DomEvent) -> None:
+        """跟踪贴底状态，驱动"回到底部"按钮显隐。"""
+        top = event.scroll_top
+        height = event.scroll_height
+        client = event.client_height
+        if top is None or height is None or client is None:
+            return
+        at_bottom = top + client >= height - 80
+        if at_bottom != self.at_bottom():
+            self.at_bottom.set(at_bottom)
+
+    async def _on_jump_click(self, _event: DomEvent) -> None:
+        await self.scroll_to_bottom(force=True)
 
     def _resolve_role(self, chat: ChatTarget, message: Message) -> GroupMemberRole:
         if not isinstance(chat, GroupChat) or message.from_self:
