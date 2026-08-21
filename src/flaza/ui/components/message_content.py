@@ -10,7 +10,7 @@ from pathlib import Path
 
 from neony.application.elements import Button
 from neony.application.theme import stub
-from neony.application.urls import data_url, file_url
+from neony.application.urls import data_url, local_url
 from neony.dom import Anchor, Audio, Border, Color, Div, DOMElement, DomEvent, Img, Span, Styles, Video
 
 from flaza.core.models import (
@@ -345,15 +345,17 @@ def _attach_image_click(image: Img, preview: ImagePreview, callback: ImageClickH
 
 
 def _local_or_remote_url(remote_url: str, cached_path: str) -> str:
-    """本地文件存在时优先返回 file://，否则回退远程 URL。
+    """本地文件存在时优先返回 neony://local/，否则回退远程 URL。
 
-    当前 WebView 环境对图片的 file:// 加载不可靠，因此图片使用
-    ``_image_url`` 走 data: URL；本函数只服务音频、视频和文件。
+    页面由 HTML 字符串加载（非 file:// origin），WebKit 会拦截 file://
+    子资源（图片走 ``_image_url`` 的 data: URL 同理），因此本地媒体
+    经 Neony 内置的 ``local_files`` 协议（neony://local/…，带 Range
+    支持）提供给 ``<video>``/``<audio>``。
     """
     if cached_path:
         path = Path(cached_path)
         if path.is_file():
-            return file_url(path)
+            return local_url(path)
     return remote_url
 
 

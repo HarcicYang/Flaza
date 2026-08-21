@@ -317,3 +317,20 @@ def test_reaction_pill_shows_self_reacted_highlight() -> None:
 
     asyncio.run(run())
     assert calls == ["👍"]
+
+
+def test_local_media_prefers_neony_protocol(tmp_path) -> None:
+    """本地缓存存在时走 neony://local/（file:// 会被 WebKit 拦截）。"""
+    from flaza.ui.components.message_content import _local_or_remote_url
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    url = _local_or_remote_url("https://expired.example/v.mp4", str(video))
+    assert url.startswith("neony://local/")
+    assert "clip.mp4" in url
+
+    missing = _local_or_remote_url("https://example.com/v.mp4", str(tmp_path / "gone.mp4"))
+    assert missing == "https://example.com/v.mp4"
+
+    no_cache = _local_or_remote_url("https://example.com/v.mp4", "")
+    assert no_cache == "https://example.com/v.mp4"

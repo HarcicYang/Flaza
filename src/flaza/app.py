@@ -11,10 +11,26 @@ from neony.application import NeonApplication, Page
 from neony.application.config import Config as NeonyConfig
 from neony.application.config import WebViewConfig
 from neony.application.config import WindowConfig as NeonyWindowConfig
+from neony.application.protocols import local_files
+from neony.dom import KeyFrame, Props
 
 from flaza.config import AppConfig, load_config
 from flaza.runtime import THEME_MAP, ApplicationRuntime
 from flaza.ui.state import UiStateStore
+
+
+def register_page_keyframes(app: NeonApplication[UiStateStore]) -> None:
+    """注册页面切换动画（设置页开启/关闭）。"""
+    app.register_keyframe(
+        KeyFrame("flaza-page-in")
+        .set("0%", Props(opacity=0.0, transform="translateY(10px)"))
+        .set("100%", Props(opacity=1.0, transform="translateY(0)"))
+    )
+    app.register_keyframe(
+        KeyFrame("flaza-page-out")
+        .set("0%", Props(opacity=1.0, transform="translateY(0)"))
+        .set("100%", Props(opacity=0.0, transform="translateY(-8px)"))
+    )
 
 
 def create_page(runtime: ApplicationRuntime) -> Page:
@@ -37,10 +53,13 @@ def build_application(config: AppConfig) -> tuple[NeonApplication[UiStateStore],
         ),
         webview=WebViewConfig(devtools=window.devtools),
     )
-    app = NeonApplication[UiStateStore](neony_config, state=runtime.state)
+    # local_files 提供 neony://local/<路径> 协议：页面非 file:// origin，
+    # WebKit 拦截 file:// 子资源，本地媒体（视频/音频/文件）须经此协议。
+    app = NeonApplication[UiStateStore](neony_config, state=runtime.state, protocols=[local_files])
     app.theme = THEME_MAP[window.theme]
     app.ready_handler = runtime.on_ready
     app.close_handler = runtime.on_close
+    register_page_keyframes(app)
 
     runtime.attach_neony_app(app)
     return app, runtime
