@@ -8,7 +8,7 @@ from neony.application.elements import ImageSegment, TextSegment
 from neony.dom import DomEvent
 
 from flaza.config import AppConfig
-from flaza.core.models import GroupMember
+from flaza.core.models import FriendChat, GroupMember
 from flaza.runtime import ApplicationRuntime
 from flaza.ui.components.composer import Composer, _data_url_to_tempfile, _mime_from_header
 
@@ -46,7 +46,37 @@ def test_composer_stages_images_inside_editor(tmp_path: Path) -> None:
     assert isinstance(segments[0], ImageSegment)
     assert segments[0].src in composer._image_paths
     assert composer._image_paths[segments[0].src] == str(image)
+    assert segments[0].alt == image.name
     assert all(isinstance(segment, (TextSegment, ImageSegment)) for segment in segments)
+
+
+def test_screenshot_paste_replaces_blob_and_sends_image_only() -> None:
+    runtime = ApplicationRuntime(AppConfig())
+    runtime.state.active_chat.set(FriendChat(uid="u_1", uin=10001))
+    sent: list[list[tuple[str, str]]] = []
+
+    async def read_clipboard() -> bytes:
+        return b"\x89PNG\r\n\x1a\nclipboard"
+
+    async def send(blocks: list[tuple[str, str]]) -> None:
+        sent.append(blocks)
+
+    async def scenario() -> None:
+        composer = Composer(runtime.actions, lambda: asyncio.sleep(0))
+        composer._actions.read_clipboard = read_clipboard  # type: ignore[method-assign]
+        composer._actions.send_composed_blocks = send  # type: ignore[method-assign]
+        composer._editor.set_content([ImageSegment(src="blob:null/screenshot")])
+
+        await composer._on_paste(DomEvent(key="editor", type="paste"))
+        assert composer._paste_image_task is not None
+        await composer._paste_image_task
+        await composer._send()
+
+    asyncio.run(scenario())
+
+    assert len(sent) == 1
+    assert sent[0][0][0] == "image"
+    assert Path(sent[0][0][1]).is_file()
 
 
 def test_at_completion_ignores_late_keyup_event() -> None:

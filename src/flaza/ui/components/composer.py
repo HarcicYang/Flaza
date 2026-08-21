@@ -116,6 +116,7 @@ class Composer:
         self._on_error = on_error
         # 编辑器里展示的是 data URL 缩略图；发送时要还原为本地路径。
         self._image_paths: dict[str, str] = {}
+        self._paste_image_task: asyncio.Task[None] | None = None
         # @ 提及状态
         self._at_group_id: int | None = None
         self._at_picker: MemberPicker | None = None
@@ -129,6 +130,7 @@ class Composer:
 
         self._editor = RichText(placeholder="输入消息…")
         self._editor.on_submit(self._on_submit)
+        self._editor.on("paste", self._on_paste)
         self._editor.on_paste_image(self._on_paste_image)
         self._editor.on_paste_files(self._on_paste_files)
         self._editor.on("input", self._on_input)
@@ -251,6 +253,29 @@ class Composer:
             self._image_paths[src] = path
             self._editor.insert_image(src, at_caret=True, alt=Path(path).name)
 
+    def _replace_blob_images(self, paths: list[str]) -> None:
+        """以已落盘的图片替换浏览器自动插入的 blob 图片段。"""
+        pending = iter(paths)
+        rebuilt: list[RichSegment] = []
+        for segment in self._editor.content():
+            if isinstance(segment, ImageSegment) and segment.src.startswith("blob:"):
+                path = next(pending, None)
+                if path is None:
+                    rebuilt.append(segment)
+                    continue
+                src = _thumb_data_url(path)
+                self._image_paths[src] = path
+                rebuilt.append(ImageSegment(src=src, alt=path))
+            else:
+                rebuilt.append(segment)
+        # Neony 已为剪贴板文件提供了本地路径，但在某些 WebKitGTK 版本
+        # 中并未把图片插入内容区；该情况下把图片追加到编辑器末尾。
+        for path in pending:
+            src = _thumb_data_url(path)
+            self._image_paths[src] = path
+            rebuilt.append(ImageSegment(src=src, alt=path))
+        self._editor.set_content(rebuilt)
+
     # ---- 发送 ----
 
     async def _send(self) -> None:
@@ -272,8 +297,8 @@ class Composer:
                     for part in resolved:
                         blocks.append(part)
             elif isinstance(segment, ImageSegment):
-                path = self._image_paths.get(segment.src, segment.src)
-                if path:
+                path = self._image_paths.get(segment.src)
+                if path is not None:
                     blocks.append(("image", path))
 
         if not any((kind == "text" and value.strip()) or (kind == "image" and value) for kind, value in blocks):
@@ -476,29 +501,49 @@ class Composer:
         elif event.value == "file":
             await self._send_files()
 
+    async def _on_paste(self, _event: DomEvent) -> None:
+        """从系统剪贴板读取没有本地文件路径的截图图片。"""
+        if self._paste_image_task is not None and not self._paste_image_task.done():
+            return
+        self._paste_image_task = asyncio.create_task(self._stage_clipboard_image())
+
+    async def _stage_clipboard_image(self) -> None:
+        try:
+            content = await self._actions.read_clipboard()
+            if not isinstance(content, bytes):
+                return
+            suffix = _suffix_for_bytes(content)
+            if suffix == ".bin":
+                return
+            path = await asyncio.to_thread(_bytes_to_tempfile, content, suffix)
+            await asyncio.sleep(0)
+            self._replace_blob_images([path])
+            await self._render()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("读取剪贴板图片失败")
+
     async def _on_paste_image(self, event: DomEvent) -> None:
         paths = [path for path in (event.value or []) if self._actions.is_image_path(path)]
         if paths:
-            self.stage_images(paths)
+            if self._paste_image_task is not None and not self._paste_image_task.done():
+                self._paste_image_task.cancel()
+            self._replace_blob_images(paths)
             await self._render()
 
     async def _on_paste_files(self, event: DomEvent) -> None:
-        images: list[str] = []
+        """处理非图片文件；图片由 RichText 的 paste_image 路径统一处理。"""
         others: list[str] = []
         for file in event.paste_files or []:
+            if str(file.get("type", "")).startswith("image/"):
+                continue
             data_url = str(file.get("data_url", ""))
             if not data_url.startswith("data:"):
                 continue
             path = await asyncio.to_thread(_data_url_to_tempfile, data_url, str(file.get("name", "")))
-            if not path:
-                continue
-            if self._actions.is_image_path(path):
-                images.append(path)
-            else:
+            if path:
                 others.append(path)
-        if images:
-            self.stage_images(images)
-            await self._render()
         if others:
             await self._actions.send_files(others)
 
@@ -539,14 +584,7 @@ def _sniff_image_mime(path: str) -> str:
         return _mime_from_header(file.read(16))
 
 
-def _data_url_to_tempfile(data_url: str, name: str) -> str | None:
-    """Decode a ``data:`` URL to a temp file; return its path or ``None``."""
-    try:
-        _header, payload = data_url.split(",", 1)
-        content = base64.b64decode(payload)
-    except (ValueError, binascii.Error):
-        return None
-    suffix = Path(name).suffix or _suffix_for_bytes(content)
+def _bytes_to_tempfile(content: bytes, suffix: str) -> str:
     descriptor, path = tempfile.mkstemp(prefix="flaza-paste-", suffix=suffix)
     try:
         with os.fdopen(descriptor, "wb") as file:
@@ -556,6 +594,17 @@ def _data_url_to_tempfile(data_url: str, name: str) -> str | None:
             Path(path).unlink()
         raise
     return path
+
+
+def _data_url_to_tempfile(data_url: str, name: str) -> str | None:
+    """Decode a ``data:`` URL to a temp file; return its path or ``None``."""
+    try:
+        _header, payload = data_url.split(",", 1)
+        content = base64.b64decode(payload, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    suffix = Path(name).suffix or _suffix_for_bytes(content)
+    return _bytes_to_tempfile(content, suffix)
 
 
 def _suffix_for_bytes(content: bytes) -> str:
