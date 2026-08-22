@@ -60,7 +60,7 @@ class SettingsPage:
             gap="12px",
             align="stretch",
         ).build()
-        actions = Div(
+        actions_row = Div(
             styles=Styles(display="flex", justify_content="flex-end", gap="8px"),
             container=[cancel.build(), save.build()],
         )
@@ -69,7 +69,7 @@ class SettingsPage:
             login_section,
             app_section,
             self._error,
-            actions,
+            actions_row,
             gap="24px",
             align="stretch",
             width="440px",

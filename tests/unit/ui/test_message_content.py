@@ -225,7 +225,9 @@ def test_quote_uses_background_depth_instead_of_border() -> None:
     assert other_blocks[0].styles.background_color != self_blocks[0].styles.background_color
     title = other_blocks[0].container[0]
     assert isinstance(title, Span)
-    assert title.container[0].startswith("10001 · 1970-01-01")
+    title_text = title.container[0]
+    assert isinstance(title_text, str)
+    assert title_text.startswith("10001 · 1970-01-01")
 
 
 def test_image_click_callback_receives_preview() -> None:
@@ -319,7 +321,7 @@ def test_reaction_pill_shows_self_reacted_highlight() -> None:
     assert calls == ["👍"]
 
 
-def test_local_media_prefers_neony_protocol(tmp_path) -> None:
+def test_local_media_prefers_neony_protocol(tmp_path: Path) -> None:
     """本地缓存存在时走 neony://local/（file:// 会被 WebKit 拦截）。"""
     from flaza.ui.components.message_content import _local_or_remote_url
 

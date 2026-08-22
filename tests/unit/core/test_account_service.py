@@ -72,6 +72,11 @@ class FakeQQ:
     async def recall_message(self, target: ChatTarget, seq: int) -> None:
         raise NotImplementedError
 
+    async def send_reaction(
+        self, chat: ChatTarget, seq: int, emoji_id: str, emoji_type: int = 2, is_cancel: bool = False
+    ) -> None:
+        raise NotImplementedError
+
     async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
         raise NotImplementedError
 

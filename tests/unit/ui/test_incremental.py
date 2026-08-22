@@ -308,14 +308,18 @@ def test_quick_actions_float_beside_bubble() -> None:
     mine = _group_message(2, "收到", 2, from_self=True)
     messages.set_messages(stored.message.chat, (stored, mine))
 
-    other_styles = messages._items["message:1"].bubble._actions.styles
+    other_bubble = messages._items["message:1"].bubble
+    assert other_bubble is not None
+    other_styles = other_bubble._actions.styles
     assert other_styles is not None
     assert other_styles.top == "50%"
     assert other_styles.transform == "translateY(-50%)"
     assert other_styles.left == "calc(100% + 6px)"
     assert other_styles.right is None
 
-    mine_styles = messages._items["message:2"].bubble._actions.styles
+    mine_bubble = messages._items["message:2"].bubble
+    assert mine_bubble is not None
+    mine_styles = mine_bubble._actions.styles
     assert mine_styles is not None
     assert mine_styles.right == "calc(100% + 6px)"
     assert mine_styles.left is None
@@ -327,8 +331,9 @@ def test_quick_actions_use_icon_values_and_map_to_reply_reaction() -> None:
     stored = _group_message(1, "你好", 1)
     messages.set_messages(stored.message.chat, (stored,))
     entry = messages._items["message:1"]
-    assert entry.bubble is not None
-    assert set(entry.bubble._action_by_key.values()) == {"chat", "favorite"}
+    bubble = entry.bubble
+    assert bubble is not None
+    assert set(bubble._action_by_key.values()) == {"chat", "favorite"}
 
     async def scenario() -> None:
         captured: list[str] = []

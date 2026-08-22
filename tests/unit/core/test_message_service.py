@@ -36,6 +36,7 @@ class FakeQQ:
         self.sent_elements: list[Sequence[MessageElement]] = []
         self.sent_files: list[tuple[str, str | None]] = []
         self.recalled: list[tuple[ChatTarget, int]] = []
+        self.reactions: list[tuple[ChatTarget, int, str, int, bool]] = []
 
     async def start(self) -> None: ...
 
@@ -98,6 +99,11 @@ class FakeQQ:
 
     async def recall_message(self, target: ChatTarget, seq: int) -> None:
         self.recalled.append((target, seq))
+
+    async def send_reaction(
+        self, chat: ChatTarget, seq: int, emoji_id: str, emoji_type: int = 2, is_cancel: bool = False
+    ) -> None:
+        self.reactions.append((chat, seq, emoji_id, emoji_type, is_cancel))
 
     async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
         self.calls.append((chat, after_seq, limit))

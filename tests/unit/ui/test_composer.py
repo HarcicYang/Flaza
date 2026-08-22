@@ -85,7 +85,10 @@ def test_at_completion_ignores_late_keyup_event() -> None:
         await composer._on_at_member_selected("u_1", 10001, "Alice", "@Alice")
         await composer._on_input(DomEvent(key="editor", type="input"))
 
-        assert composer._editor.content()[0].text == "@Alice "
+        segments = composer._editor.content()
+        assert len(segments) == 1
+        assert isinstance(segments[0], TextSegment)
+        assert segments[0].text == "@Alice "
         assert composer._at_active is False
         assert composer._at_picker is not None
         assert composer._at_picker.is_open is False
