@@ -26,6 +26,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      # lumiview 的 Rust 扩展在 import 时加载 WebKitGTK 运行时库。
+      - name: Install WebKitGTK runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-0
+
       - name: Install dependencies
         run: uv sync --frozen
 
