@@ -6,11 +6,14 @@ on:
       - '**.py'
       - 'pyproject.toml'
       - 'uv.lock'
+      - '.github/workflows/ruff.yaml'
   pull_request:
     paths:
       - '**.py'
       - 'pyproject.toml'
       - 'uv.lock'
+      - '.github/workflows/ruff.yaml'
+  workflow_dispatch:
 
 jobs:
   ci:
