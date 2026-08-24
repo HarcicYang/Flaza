@@ -144,6 +144,25 @@ def test_message_list_keeps_bubble_when_only_media_cache_changes() -> None:
 
     assert messages.root.container[0] is bubble_before
     assert messages._items["message:1"].message == cached.message
+    assert messages._items["message:1"].bubble
+    raw_content = messages._items["message:1"].bubble._bubble.container[0]
+    assert isinstance(raw_content, DOMElement)
+    content: DOMElement = raw_content
+    videos = []
+
+    def walk(element: DOMElement) -> None:
+        from neony.dom import Video
+
+        if isinstance(element, Video):
+            videos.append(element)
+        for child in element.container:
+            if isinstance(child, DOMElement):
+                walk(child)
+
+    walk(content)
+    assert len(videos) == 1
+    assert videos[0].src == "https://example.com/v.mp4"
+    assert videos[0].args.get("data-neony-direct-events")
 
 
 def test_message_list_prepends_older_messages_without_rebuilding() -> None:

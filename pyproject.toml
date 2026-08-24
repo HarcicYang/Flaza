@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flaza"
-version = "0.1.0"
+version = "0.2.0"
 description = "基于 lagrange-python 与 Neony 的 QQ 桌面客户端"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -16,7 +16,8 @@ dependencies = [
     "aiosqlite>=0.20",
     "lagrange-python @ git+https://github.com/HarcicYang/lagrange-python.git",
     "msgpack>=1.1",
-    "neony>=0.2.3.post2",
+    "neony>=0.2.4.post1",
+    "imageio-ffmpeg>=0.5.0",
 ]
 
 [project.scripts]

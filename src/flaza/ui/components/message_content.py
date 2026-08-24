@@ -8,10 +8,12 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
+from neony.application.elements import Audio as MediaAudio
 from neony.application.elements import Button
+from neony.application.elements import Video as MediaVideo
 from neony.application.theme import stub
 from neony.application.urls import data_url, local_url
-from neony.dom import Anchor, Audio, Border, Color, Div, DOMElement, DomEvent, Img, Span, Styles, Video
+from neony.dom import Anchor, Border, Color, Div, DOMElement, DomEvent, Img, Span, Styles
 
 from flaza.core.models import (
     AtAllElement,
@@ -61,22 +63,7 @@ _IMAGE = Styles(
     flex_shrink="0",
     align_self="flex-start",
 )
-_AUDIO = Styles(
-    display="block",
-    width="100%",
-    flex_shrink="0",
-    align_self="stretch",
-)
-_VIDEO = Styles(
-    display="block",
-    max_width="100%",
-    max_height="360px",
-    border_radius="8px",
-    object_fit="contain",
-    flex_shrink="0",
-    align_self="flex-start",
-)
-
+_AUDIO = Styles(display="block", width="100%", align_self="stretch")
 _CARD = Styles(
     display="inline-flex",
     flex_direction="column",
@@ -280,13 +267,24 @@ def _build_element(
     if isinstance(element, AudioElement):
         src = _local_or_remote_url(element.url, element.cached_path)
         if src:
-            return Audio(src=src, controls=True, preload="none", styles=_AUDIO)
+            audio_component = MediaAudio(src, preload="none")
+            audio_component._media.styles = audio_component._media.styles.model_copy(
+                update=_AUDIO.model_dump(exclude_none=True)
+            )
+            audio = audio_component.build()
+            return audio
         return _card("语音", _format_duration(element.time))
 
     if isinstance(element, VideoElement):
         src = _local_or_remote_url(element.url, element.cached_path)
         if src:
-            return Video(src=src, controls=True, preload="metadata", styles=_sized_video_styles(element))
+            # 托管组件通过正式 build() 挂载，保留直接媒体事件与内部
+            # 播放命令的组件上下文；封面用视频首帧生成，避免黑块。
+            return MediaVideo(
+                src,
+                width=_video_width(element),
+                preload="metadata",
+            ).build()
         return _card("视频", _format_duration(element.time))
 
     if isinstance(element, FileElement):
@@ -405,11 +403,11 @@ def _sized_market_face_styles(element: MarketFaceElement) -> Styles:
     return styles.model_copy(update={"width": f"{min(element.width, 180)}px"})
 
 
-def _sized_video_styles(element: VideoElement) -> Styles:
-    styles = _VIDEO
+def _video_width(element: VideoElement) -> int | str:
+    """托管 Video 组件的宽度：有元数据取上限 420px，否则撑满气泡。"""
     if element.width <= 0:
-        return styles.model_copy(update={"width": "100%"})
-    return styles.model_copy(update={"width": f"{min(element.width, 420)}px"})
+        return "100%"
+    return min(element.width, 420)
 
 
 def _at_span(text: str, from_self: bool) -> Span:

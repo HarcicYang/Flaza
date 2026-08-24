@@ -12,7 +12,14 @@ from neony.application.elements import Avatar, Badge, Button, MessageBubble, Not
 from neony.application.theme import stub
 from neony.dom import Border, Computed, DOMElement, DomEvent, Signal, Span, Styles, Transition
 
-from flaza.core.models import ChatTarget, FileElement, GroupChat, GroupMemberRole, Message, StoredMessage
+from flaza.core.models import (
+    ChatTarget,
+    FileElement,
+    GroupChat,
+    GroupMemberRole,
+    Message,
+    StoredMessage,
+)
 from flaza.ui.avatars import friend_avatar_url
 from flaza.ui.components.image_viewer import ImagePreview
 from flaza.ui.components.message_content import build_message_content
@@ -294,6 +301,7 @@ class MessageList:
                 and _strip_media_cache(entry.message) == _strip_media_cache(message)
             ):
                 entry.message = message
+                self._rebuild_message_content(stored)
                 continue
             # 仅 reactions 变化时只重建内容元素，保留气泡根节点的事件处理器
             if (
@@ -315,7 +323,13 @@ class MessageList:
                         on_reaction_click=on_reaction_click,
                         self_uid=self_uid,
                     )
-                    entry.bubble._bubble.container = [new_content]
+                    # Reactions-only refresh: same in-place swap hazard as
+                    # _replace_child — re-link parent pointers by hand.
+                    old_content = entry.bubble._bubble.container[0] if entry.bubble._bubble.container else None
+                    if isinstance(old_content, DOMElement):
+                        old_content._parent = None
+                    new_content._parent = entry.bubble._bubble
+                    object.__setattr__(entry.bubble._bubble, "container", [new_content])
                 continue
             # 撤回、身份变化、头像变化：原地替换该元素。
             old_bubble = entry.bubble
@@ -340,9 +354,41 @@ class MessageList:
         index = self._index_of(entry.element)
         if index is None:
             return
+        # old = entry.element
+        # _Children-aware pop/insert keeps _parent pointers in sync and
+        # marks the tree dirty — never bypass with plain list surgery.
         self.root.container.pop(index)
         self.root.container.insert(index, element)
         entry.element = element
+
+    def _rebuild_message_content(self, stored: StoredMessage) -> None:
+        """缓存路径变化后只刷新消息内容，保留气泡根与交互组件。"""
+        entry = self._items.get(f"message:{stored.id}")
+        bubble = entry.bubble if entry else None
+        if entry is None or entry.message is None or bubble is None:
+            return
+
+        self_info = self._state.self_info()
+        self_uid = self_info.uid if self_info else None
+        old_content: DOMElement | None = None
+        if bubble._bubble.container and isinstance(bubble._bubble.container[0], DOMElement):
+            old_content = bubble._bubble.container[0]
+        new_content = build_message_content(
+            entry.message,
+            self._on_image_click,
+            self._on_file_download,
+            on_reaction_click=self._make_reaction_pill_handler(stored, self_uid),
+            self_uid=self_uid,
+        )
+        if old_content is not None and _replace_child(bubble._bubble, old_content, new_content):
+            return
+        # Fallback: container was empty or old content not found — full
+        # swap with manual parent relinking.
+        stale = bubble._bubble.container[0] if bubble._bubble.container else None
+        if isinstance(stale, DOMElement):
+            stale._parent = None
+        new_content._parent = bubble._bubble
+        object.__setattr__(bubble._bubble, "container", [new_content])
 
     def _index_of(self, element: DOMElement) -> int | None:
         for index, child in enumerate(self.root.container):
@@ -565,6 +611,24 @@ def _strip_media_cache(message: Message) -> Message:
         for element in message.elements
     )
     return message.model_copy(update={"elements": elements})
+
+
+def _replace_child(parent: DOMElement, old: DOMElement, new: DOMElement) -> bool:
+    """Replace *old* with *new* inside ``parent.container``.
+
+    In-place container surgery bypasses the ``_Children`` aware list, so
+    the new subtree's ``_parent`` pointer must be re-linked by hand (and
+    the stale link on *old* cleared); without this, commands that walk
+    ``_parent`` to find the tree root — eval-js transport, clipboard,
+    render requests — silently fail for the replaced content.
+    """
+    for index, child in enumerate(parent.container):
+        if child is old:
+            parent.container[index] = new
+            old._parent = None
+            new._parent = parent
+            return True
+    return False
 
 
 class _MessageListHelpers:

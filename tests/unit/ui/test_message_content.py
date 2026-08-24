@@ -3,7 +3,9 @@
 import asyncio
 from pathlib import Path
 
-from neony.dom import Anchor, Audio, Div, DOMElement, DomEvent, Img, Span, Video
+from neony.application.elements import Audio as ManagedAudioComponent
+from neony.dom import Anchor, Div, DOMElement, DomEvent, Img, Span, Video
+from neony.dom import Audio as DomAudio
 
 from flaza.core.models import (
     AtElement,
@@ -93,7 +95,7 @@ def test_media_splits_inline_text_groups() -> None:
     assert isinstance(root.container[2], Span)
 
 
-def test_image_audio_video_use_native_elements_when_url_present() -> None:
+def test_image_audio_and_video_use_managed_media_components() -> None:
     root = build_message_content(
         _message(
             ImageElement(url="https://example.com/pic.png", width=640, height=480),
@@ -104,8 +106,14 @@ def test_image_audio_video_use_native_elements_when_url_present() -> None:
 
     elements = _walk(root)
     assert sum(isinstance(element, Img) for element in elements) == 1
-    assert sum(isinstance(element, Audio) for element in elements) == 1
-    assert sum(isinstance(element, Video) for element in elements) == 1
+    assert sum(isinstance(element, DomAudio) for element in elements) == 1
+    assert sum(isinstance(element, ManagedAudioComponent) for element in elements) == 0
+    # 视频走托管组件的内嵌树：内层 <video> 带直接事件桥标记，
+    # 且不再有原生 controls（传输条由组件自绘）。
+    videos = [element for element in elements if isinstance(element, Video)]
+    assert len(videos) == 1
+    assert videos[0].args.get("data-neony-direct-events")
+    assert not videos[0].args.get("controls")
 
 
 def test_missing_media_url_renders_placeholder_cards() -> None:
@@ -116,7 +124,7 @@ def test_missing_media_url_renders_placeholder_cards() -> None:
     descendants = _walk(root)
     cards = [element for element in descendants if isinstance(element, Div) and element.styles.border]
     assert len(cards) == 3
-    assert sum(isinstance(element, Audio) for element in descendants) == 0
+    assert sum(isinstance(element, DomAudio) for element in descendants) == 0
     assert sum(isinstance(element, Video) for element in descendants) == 0
 
 
@@ -188,14 +196,21 @@ def test_audio_and_video_are_not_squeezed_in_mixed_content() -> None:
         )
     )
 
-    audios = [element for element in _walk(root) if isinstance(element, Audio)]
+    audios = [element for element in _walk(root) if isinstance(element, DomAudio)]
     videos = [element for element in _walk(root) if isinstance(element, Video)]
     assert len(audios) == 1
     assert len(videos) == 1
     assert audios[0].styles.width == "100%"
-    assert audios[0].styles.flex_shrink == "0"
-    assert videos[0].styles.width == "420px"
-    assert videos[0].styles.flex_shrink == "0"
+    assert audios[0].styles.align_self == "stretch"
+    # 托管组件：宽度经构造参数落在其根节点样式上（上限 420px），
+    # 内层 <video> 撑满组件根。
+    assert videos[0].styles.width == "100%"
+    managed_roots = [
+        element
+        for element in _walk(root)
+        if isinstance(element, Div) and element.styles.width == "420px" and element.styles.background_color is not None
+    ]
+    assert len(managed_roots) == 1
 
 
 def _quote_blocks(root: DOMElement) -> list[Div]:
