@@ -7,6 +7,7 @@ import contextlib
 import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TypeVar
 
 from pydantic import BaseModel, ConfigDict
@@ -171,22 +172,35 @@ class GroupReactionChanged(FlazaEvent):
 
 _E = TypeVar("_E", bound=FlazaEvent)
 EventHandler = Callable[[_E], Awaitable[None]]
+BeforeEventHandler = Callable[[_E], Awaitable[_E | None]]
+
+
+@dataclass(frozen=True, slots=True)
+class _HandlerEntry:
+    """事件总线内部的一条处理器记录。"""
+
+    priority: int
+    order: int
+    mode: str
+    handler: Callable[[FlazaEvent], Awaitable[object]]
+    token: object
 
 
 class Subscription:
     """事件订阅句柄，dispose 后不再接收事件。"""
 
-    def __init__(self, bus: EventBus, event_type: type[FlazaEvent], handler: EventHandler[FlazaEvent]) -> None:
+    def __init__(self, bus: EventBus, event_type: type[FlazaEvent], token: object, handler: object) -> None:
         self._bus = bus
         self._event_type = event_type
         self._handler = handler
+        self._token = token
         self._disposed = False
 
     def dispose(self) -> None:
         """退订事件，重复调用无副作用。"""
         if self._disposed:
             return
-        self._bus._remove(self._event_type, self._handler)
+        self._bus._remove(self._event_type, self._token)
         self._disposed = True
 
 
@@ -195,36 +209,77 @@ class EventBus:
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[FlazaEvent] = asyncio.Queue()
-        self._handlers: dict[type[FlazaEvent], list[EventHandler[FlazaEvent]]] = defaultdict(list)
+        self._handlers: dict[type[FlazaEvent], list[_HandlerEntry]] = defaultdict(list)
+        self._order = 0
 
     def publish(self, event: FlazaEvent) -> None:
         """把事件放入队列，立即返回。"""
         self._queue.put_nowait(event)
 
-    def subscribe(self, event_type: type[_E], handler: EventHandler[_E]) -> Subscription:
-        """注册某类事件的异步处理器，同一处理器类型可注册多个。"""
-        self._handlers[event_type].append(handler)  # type: ignore[arg-type]
-        return Subscription(self, event_type, handler)  # type: ignore[arg-type]
+    def subscribe(self, event_type: type[_E], handler: EventHandler[_E], *, priority: int = 0) -> Subscription:
+        """注册某类事件的异步处理器；数值大的优先级先执行，同优先级按注册顺序。"""
+        return self._register(event_type, handler, "normal", priority)
+
+    def subscribe_before(
+        self,
+        event_type: type[_E],
+        handler: BeforeEventHandler[_E],
+        *,
+        priority: int = 100,
+    ) -> Subscription:
+        """注册前置处理器，可改写事件；返回 ``None`` 表示吞掉事件。"""
+        return self._register(event_type, handler, "before", priority)
+
+    def subscribe_after(
+        self,
+        event_type: type[_E],
+        handler: EventHandler[_E],
+        *,
+        priority: int = -100,
+    ) -> Subscription:
+        """注册后置处理器，默认在普通处理器之后执行。"""
+        return self._register(event_type, handler, "after", priority)
+
+    def _register(
+        self,
+        event_type: type[_E],
+        handler: object,
+        mode: str,
+        priority: int,
+    ) -> Subscription:
+        token = object()
+        self._handlers[event_type].append(_HandlerEntry(priority, self._order, mode, handler, token))
+        self._order += 1
+        return Subscription(self, event_type, token, handler)  # type: ignore[arg-type]
 
     async def run(self) -> None:
-        """消费队列并按注册顺序依次 await 处理器。
+        """消费队列并按优先级依次 await 处理器。
 
         任务被取消时停止；单个处理器异常只记录日志，不阻塞后续事件。
         """
         while True:
             event = await self._queue.get()
-            for handler in self._handlers[type(event)]:
+            entries = sorted(
+                self._handlers[type(event)],
+                key=lambda entry: (-entry.priority, entry.order),
+            )
+            for entry in entries:
                 try:
-                    await handler(event)  # type: ignore[arg-type]
+                    result = await entry.handler(event)  # type: ignore[misc]
                 except asyncio.CancelledError:
                     raise
                 except Exception:
                     logger.exception("事件处理器执行失败: %r", event)
+                if entry.mode == "before":
+                    if result is None:
+                        break
+                    if result is not event and isinstance(result, FlazaEvent):
+                        event = result
 
-    def _remove(self, event_type: type[FlazaEvent], handler: EventHandler[FlazaEvent]) -> None:
+    def _remove(self, event_type: type[FlazaEvent], token: object) -> None:
         """移除一个已注册的处理器。"""
         handlers = self._handlers.get(event_type)
         if handlers is None:
             return
         with contextlib.suppress(ValueError):
-            handlers.remove(handler)
+            handlers[:] = [entry for entry in handlers if entry.token is not token]

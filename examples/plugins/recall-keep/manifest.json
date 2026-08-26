@@ -1,0 +1,9 @@
+{
+  "id": "recall-keep",
+  "name": "撤回内容保留",
+  "version": "0.1.0",
+  "entry": "main.py",
+  "author": "Flaza",
+  "description": "收到撤回事件时保留本地消息内容，并标记为已撤回。",
+  "dependencies": []
+}

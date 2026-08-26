@@ -117,3 +117,74 @@
   复制文本、下载文件与撤回自己发送的消息。
 - 图片预览画布占满预览区域：缩放后图片不再受原图显示区域限制，
   可在整个画布内平移查看。
+
+### 9. 插件系统（M1 基础已实现）
+
+- 插件以目录 + `manifest.json` 分发；插件元数据与配套配置只使用 JSON，
+  不使用 YAML。
+- 插件目录建议为 `plugins/<plugin_id>/`，入口模块由 `entry` 指定；
+  插件加载进 Flaza 进程，默认不设沙箱、不做权限墙。
+- 安全模型：插件拥有当前用户完整权限，安全责任由插件开发者和使用者承担；
+  Flaza 只对可捕获异常做错误隔离，并负责插件任务的退出清理，不承诺防御
+  插件主动退出、死循环、耗尽内存或恶意系统调用。
+- 插件拥有完整访问通道：`PluginContext.runtime` 暴露 `ApplicationRuntime`，
+  可继续访问 Storage、EventBus、服务、QQ 客户端、Shell 与 Neony 应用；
+  插件也可以直接 `import flaza.*` / `import neony.*`。稳定便利 API 承诺
+  兼容，内部结构允许使用但不承诺长期稳定。
+- 生命周期：`PluginHost` 负责发现、校验、加载、启动、停止与任务清理；
+  启动时机在存储和 EventBus 就绪后、`start_qq()` 之前，退出时先于
+  QQ 与服务停止。
+- 依赖：`manifest.json` 的 `dependencies` 记录 PEP 508 字符串；启动时
+  仅检查并警告缺失或版本不匹配，不阻止加载，也不自动安装。
+- 状态与 KV：插件启停状态、设置与 KV 持久化到根目录 `plugin_state.json`。
+- 消息拦截：收发路径增加可注册过滤器。入站过滤在持久化和 UI 投影前
+  执行，可改写或吞掉消息；出站过滤在调用 QQ 前执行，可改写目标与元素
+  或中止发送。
+- 消息段扩展：核心加入通用 `PluginElement(plugin_id, element_type, payload,
+  preview_text)`，作为 `MessageElement` 联合的一类；插件注册渲染器、发送器
+  与预览文本，插件缺失时回退占位卡。V1 不做动态重建 discriminated union。
+- 事件扩展：插件可以自定义 `FlazaEvent` 子类并通过 `ctx.publish` /
+  `ctx.subscribe` 使用；`EventBus` 增加优先级，支持 `ctx.before_event` /
+  `ctx.after_event`，使插件能赶在内置服务之前处理事件。
+- 操作钩子：提供 `ctx.before_recall` 等动作前置钩子；用户主动撤回时可在
+  调用 QQ API 之前中止。
+- UI 扩展：标题栏按钮、消息快捷动作、右键菜单项与设置页插件面板作为固定
+  挂点；插件允许直接操作 DOM、页面与 `eval_js`，Flaza 核心自身仍不手写
+  JavaScript。
+- 撤回示例确认：收到撤回事件后，插件可用 `ctx.before_event(MessageRecalled,
+  ...)` 改写本地消息（例如保留原元素并追加“（已撤回）”标记，或启用保留
+  内容渲染字段）后吞掉事件；若想真正阻止用户主动撤回，应在 `ctx.before_recall`
+  中中止，而不是依赖撤回事件处理。
+- M1 已落地：`PluginDiscovery`/`PluginManifest` 负责发现与 JSON 校验，
+  `PluginState` 以根目录 `plugin_state.json`（`enabled`、`disabled`、`settings`、
+  `kv`）持久化，`PluginHost` 在存储与 EventBus 就绪后启动、退出时先于 QQ 停止；
+  插件入口导出模块级 `plugin` 实例，插件目录以 `flaza_plugin_<id>` 命名空间包
+  动态导入，支持插件内相对导入与跨插件包导入。
+- M1 已落地的事件扩展：`EventBus` 支持优先级排序以及 `subscribe_before` /
+  `subscribe_after`；`PluginContext` 提供 `publish`、`subscribe`、
+  `before_event`、`after_event`，前置处理器可返回替换事件或用 `None` 吞掉事件。
+- M2 已落地：`PluginExtensionRegistry` 集中管理出站过滤器、撤回钩子与消息段
+  扩展，注册句柄可单独 `dispose`；`PluginContext` 提供 `filter_outgoing_message`、
+  `filter_outgoing_file`、`before_recall` 与 `register_element` 便利 API。
+- M2 已落地的出站拦截：`MessageService` 在调用 QQ 之前按注册顺序执行出站消息
+  与文件过滤器，可改写目标、元素或文件参数，返回 `None` 则中止发送；单个
+  过滤器异常只记录日志并跳过，不阻塞整条发送路径。
+- M2 已落实的撤回钩子：用户主动撤回前执行 `before_recall`，任一钩子返回
+  `False` 时不调用 QQ API；收到撤回事件仍走 `before_event` 改写本地消息，
+  两条路径职责分离。
+- M2 已落地的消息段扩展：核心模型加入 `PluginElement`；插件可为自己的
+  `plugin_id + element_type` 注册 `renderer` 与 `sender`。`renderer` 返回 UI
+  元素，未注册或异常时回退占位卡；`sender` 返回协议元素与持久化领域元素，
+  `LagrangeQQClient` 在发送路径自动调用，缺失或失败时抛出明确错误。
+- M2 已落地的撤回保留渲染：`Message.retain_content_on_recall` 为 `True` 时
+  本地气泡保留原内容；`MessageRepository.replace_message` 允许插件在同一会话
+  同一 seq 上替换完整领域模型，旧数据库会在启动时自动迁移 `sender_uid` 列。
+- M2 示例插件：`examples/plugins/recall-keep/` 提供可直接复制到 `plugins/`
+  的撤回保留插件，演示 `before_event` 拦截、`replace_message` 改写本地消息、
+  吞掉事件并主动刷新 UI。
+- M2 已落地的 UI 接入与卸载清理：`HomePage`、`MessageList` 与
+  `build_message_content` 透传插件注册表渲染自定义消息段；`PluginHost.stop`
+  依次调用 `on_unload`、退订事件、移除插件扩展注册并取消托管任务。
+- M2 已落地的插件管理 UI：设置页新增插件目录输入与原生目录选择入口，
+  并提供独立的「插件管理」页面；页面列出已发现插件，显示启用/加载状态，
+  支持逐个启用或禁用、重新加载与目录热切换，无需重启应用。

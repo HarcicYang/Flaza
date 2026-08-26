@@ -34,13 +34,15 @@ class MessageRepository:
         await self._db.execute(
             """
             INSERT OR IGNORE INTO messages
-                (chat_kind, chat_id, sender_uin, seq, client_seq, rand, timestamp, from_self, recalled, text, payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (chat_kind, chat_id, sender_uin, sender_uid, seq, client_seq,
+                 rand, timestamp, from_self, recalled, text, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_kind,
                 chat_id,
                 message.sender_uin,
+                message.sender_uid,
                 message.seq,
                 message.client_seq,
                 message.rand,
@@ -126,6 +128,67 @@ class MessageRepository:
         )
         await self._db.commit()
         return merged if cursor.rowcount > 0 else None
+
+    async def replace_message(self, message: Message) -> StoredMessage | None:
+        """用完整领域模型替换同会话同 seq 消息，包含撤回等全部字段。
+
+        供插件改写本地消息使用；会话与 seq 保持原值不变，避免重写过程
+        改变消息在聊天流中的身份。
+        """
+        chat_kind, chat_id = _chat_columns(message.chat)
+        cursor = await self._db.execute(
+            "SELECT id, payload FROM messages WHERE chat_kind = ? AND chat_id = ? AND seq = ?",
+            (chat_kind, chat_id, message.seq),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+
+        current = decode_message(row["payload"])
+        merged = current.model_copy(
+            update={
+                "sender_uin": message.sender_uin,
+                "sender_uid": message.sender_uid,
+                "sender_name": message.sender_name,
+                "client_seq": message.client_seq,
+                "rand": message.rand,
+                "timestamp": message.timestamp,
+                "elements": message.elements,
+                "from_self": message.from_self,
+                "recalled": message.recalled,
+                "retain_content_on_recall": message.retain_content_on_recall,
+                "sender_is_bot": message.sender_is_bot,
+                "sender_role": message.sender_role,
+                "reactions": message.reactions,
+            }
+        )
+        cursor = await self._db.execute(
+            """
+            UPDATE messages SET
+                sender_uin = ?,
+                sender_uid = ?,
+                from_self = ?,
+                recalled = ?,
+                text = ?,
+                payload = ?
+            WHERE chat_kind = ? AND chat_id = ? AND seq = ?
+            """,
+            (
+                merged.sender_uin,
+                merged.sender_uid,
+                int(merged.from_self),
+                int(merged.recalled),
+                merged.text,
+                encode_message(merged),
+                chat_kind,
+                chat_id,
+                message.seq,
+            ),
+        )
+        await self._db.commit()
+        if cursor.rowcount <= 0:
+            return None
+        return StoredMessage(id=int(row["id"]), message=merged)
 
     async def apply_group_reaction(
         self,

@@ -26,6 +26,7 @@ from flaza.core.models import (
     MarketFaceElement,
     Message,
     MessageElement,
+    PluginElement,
     PokeElement,
     QuoteElement,
     TextElement,
@@ -33,6 +34,7 @@ from flaza.core.models import (
     VideoElement,
     quote_preview_text,
 )
+from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.ui.components.image_viewer import ImagePreview
 
 ImageClickHandler = Callable[[ImagePreview], Awaitable[None]]
@@ -156,6 +158,7 @@ def build_message_content(
     on_file_download: FileDownloadHandler | None = None,
     on_reaction_click: ReactionClickHandler | None = None,
     self_uid: str | None = None,
+    plugin_registry: PluginExtensionRegistry | None = None,
 ) -> DOMElement:
     """把消息元素渲染为 MessageBubble 的 content。
 
@@ -169,11 +172,27 @@ def build_message_content(
         if isinstance(element, _INLINE_ELEMENT_TYPES):
             inline: list[DOMElement] = []
             while index < len(elements) and isinstance(elements[index], _INLINE_ELEMENT_TYPES):
-                inline.append(_build_element(elements[index], message.from_self, on_image_click, on_file_download))
+                inline.append(
+                    _build_element(
+                        elements[index],
+                        message.from_self,
+                        on_image_click,
+                        on_file_download,
+                        plugin_registry,
+                    )
+                )
                 index += 1
             children.append(Span(styles=_INLINE_GROUP, container=inline))
         else:
-            children.append(_build_element(element, message.from_self, on_image_click, on_file_download))
+            children.append(
+                _build_element(
+                    element,
+                    message.from_self,
+                    on_image_click,
+                    on_file_download,
+                    plugin_registry,
+                )
+            )
             index += 1
 
     # 添加表情回应显示
@@ -227,6 +246,7 @@ def _build_element(
     from_self: bool,
     on_image_click: ImageClickHandler | None,
     on_file_download: FileDownloadHandler | None,
+    plugin_registry: PluginExtensionRegistry | None,
 ) -> DOMElement:
     if isinstance(element, TextElement):
         return Span(container=[element.text], styles=_TEXT)
@@ -330,10 +350,26 @@ def _build_element(
     if isinstance(element, ForwardElement):
         return _card("聊天记录", element.file_name or "合并转发消息")
 
+    if isinstance(element, PluginElement):
+        return _build_plugin_element(element, plugin_registry)
+
     if isinstance(element, UnknownElement):
         return _card(element.display, element.original_kind)
 
     return _card("[未知消息]", type(element).__name__)
+
+
+def _build_plugin_element(
+    element: PluginElement,
+    plugin_registry: PluginExtensionRegistry | None,
+) -> DOMElement:
+    """渲染插件消息段；未注册或渲染失败时回退为占位卡。"""
+    if plugin_registry is not None:
+        rendered = plugin_registry.render_plugin_element(element)
+        if isinstance(rendered, DOMElement):
+            return rendered
+    title = element.preview_text.strip() or "[插件消息]"
+    return _card(title, element.element_type)
 
 
 def _attach_image_click(image: Img, preview: ImagePreview, callback: ImageClickHandler) -> None:

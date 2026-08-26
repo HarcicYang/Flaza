@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS messages (
     chat_kind     TEXT NOT NULL,
     chat_id       TEXT NOT NULL,
     sender_uin    INTEGER NOT NULL,
+    sender_uid    TEXT NOT NULL DEFAULT '',
     seq           INTEGER NOT NULL,
     client_seq    INTEGER,
     rand          INTEGER,
@@ -143,6 +144,8 @@ class Storage:
 
         if await has_column("messages", "recalled") is False:
             await db.execute("ALTER TABLE messages ADD COLUMN recalled INTEGER NOT NULL DEFAULT 0")
+        if await has_column("messages", "sender_uid") is False:
+            await db.execute("ALTER TABLE messages ADD COLUMN sender_uid TEXT NOT NULL DEFAULT ''")
         if await has_column("groups", "owner_uid") is False:
             await db.execute("ALTER TABLE groups ADD COLUMN owner_uid TEXT")
 

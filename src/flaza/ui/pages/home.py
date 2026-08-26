@@ -17,6 +17,7 @@ from flaza.core.events import (
     EventBus,
 )
 from flaza.core.models import ChatTarget, FileElement, GroupChat, GroupMemberRole, StoredMessage
+from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.ui.actions import UiActions
 from flaza.ui.components.composer import Composer
 from flaza.ui.components.image_viewer import ImageViewer
@@ -101,6 +102,7 @@ class HomePage:
         bus: EventBus,
         config: AppConfig,
         render: Callable[[], Awaitable[None]],
+        plugin_registry: PluginExtensionRegistry | None = None,
     ) -> None:
         self._state = state
         self._actions = actions
@@ -112,6 +114,7 @@ class HomePage:
         self._state_refresh_again = False
         self._refresh_lock = asyncio.Lock()
         self._bus = bus
+        self._plugin_registry = plugin_registry
         actions.set_chat_view_refresher(self._refresh_async)
 
         self.session_list = SessionList(state, actions, self._on_session_selected)
@@ -123,6 +126,7 @@ class HomePage:
             on_reaction_selected=self._on_reaction_selected,
             on_load_older=self._on_load_older,
             on_file_download=self._on_file_download,
+            plugin_registry=self._plugin_registry,
         )
         self.toast = Toast(placement="top-right", duration=3.0, top_offset="40px")
         self.composer = Composer(actions, render, on_error=self._show_error)

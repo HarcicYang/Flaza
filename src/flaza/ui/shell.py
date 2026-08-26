@@ -17,6 +17,7 @@ from flaza.ui.actions import UiActions
 from flaza.ui.avatars import friend_avatar_url
 from flaza.ui.pages.home import HomePage
 from flaza.ui.pages.login import LoginPage
+from flaza.ui.pages.plugin_manager import PluginManagerPage
 from flaza.ui.pages.settings import SettingsPage
 from flaza.ui.pages.setup import SetupPage
 from flaza.ui.state import UiStateStore
@@ -176,7 +177,14 @@ class ShellView:
     async def _on_login_phase(self, event: LoginPhaseChanged) -> None:
         if event.phase is LoginPhase.ONLINE and self._screen != "main":
             self._screen = "main"
-            home = HomePage(self._state, self._actions, self._bus, self._config, self._render)
+            home = HomePage(
+                self._state,
+                self._actions,
+                self._bus,
+                self._config,
+                self._render,
+                plugin_registry=self._actions._runtime.plugin_registry,
+            )
             self._home = home
             self._mount(home.root)
             self._install_main_toolbar(home)
@@ -191,7 +199,39 @@ class ShellView:
         self._settings_return_screen = self._screen
         self._toolbar.container.clear()
         self._screen = "settings"
-        self._mount(SettingsPage(self._actions, config.login, config.window, self._render, self._close_settings).root)
+        self._mount(
+            SettingsPage(
+                self._actions,
+                config.login,
+                config.window,
+                config.paths,
+                self._render,
+                self._close_settings,
+                self._open_plugin_manager,
+            ).root
+        )
+        await self._render()
+
+    async def _open_plugin_manager(self) -> None:
+        self._toolbar.container.clear()
+        self._screen = "plugin_manager"
+        self._mount(PluginManagerPage(self._actions, self._render, self._close_plugin_manager).root)
+        await self._render()
+
+    async def _close_plugin_manager(self) -> None:
+        self._screen = "settings"
+        config = self._actions.current_config()
+        self._mount(
+            SettingsPage(
+                self._actions,
+                config.login,
+                config.window,
+                config.paths,
+                self._render,
+                self._close_settings,
+                self._open_plugin_manager,
+            ).root
+        )
         await self._render()
 
     async def _close_settings(self) -> None:

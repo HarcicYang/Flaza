@@ -38,6 +38,7 @@ from flaza.core.models import (
     ImageElement,
     Message,
     MessageElement,
+    PluginElement,
     QrCodeData,
     QrCodeState,
     QuoteElement,
@@ -45,6 +46,7 @@ from flaza.core.models import (
     SilentLoginResult,
     TextElement,
 )
+from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.qq.adapter import LagrangeEventAdapter
 from flaza.qq.convert import (
     friend_message_to_domain,
@@ -67,10 +69,18 @@ _QR_STATE_MAP = {
 class LagrangeQQClient:
     """协议端口 QQClient 的 lagrange-python 实现。"""
 
-    def __init__(self, login: LoginConfig, paths: PathsConfig, bus: EventBus, messages: Any = None) -> None:
+    def __init__(
+        self,
+        login: LoginConfig,
+        paths: PathsConfig,
+        bus: EventBus,
+        messages: Any = None,
+        plugin_registry: PluginExtensionRegistry | None = None,
+    ) -> None:
         self._login = login
         self._paths = paths
         self._bus = bus
+        self._plugin_registry = plugin_registry
         self._client: Client | None = None
         self._info: InfoManager | None = None
         self._adapter = LagrangeEventAdapter(bus, messages=messages)
@@ -382,6 +392,10 @@ class LagrangeQQClient:
                 Quote(seq=element.seq, uin=element.uin, timestamp=element.timestamp, uid=element.uid, msg=element.msg),
                 element,
             )
+        if isinstance(element, PluginElement):
+            if self._plugin_registry is None:
+                raise RuntimeError("插件消息段发送器未注册")
+            return await self._plugin_registry.convert_plugin_element(target, element)
         if isinstance(element, ImageElement) and element.local_path:
             uploaded = await self._upload_image(target, element.local_path)
             if isinstance(target, GroupChat) and getattr(uploaded, "id", 0) == 0:

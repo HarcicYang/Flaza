@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import cast
 
-from neony.application.elements import Button, CascadingDropdown, Heading, MenuBranch, Text, VStack
+from neony.application import icons
+from neony.application.elements import Button, CascadingDropdown, Heading, Input, MenuBranch, Text, VStack
 from neony.dom import Animation, Div, DomEvent, Styles
 
-from flaza.config import LoginConfig, ThemeName, WindowSettings
+from flaza.config import LoginConfig, PathsConfig, ThemeName, WindowSettings
 from flaza.ui.actions import UiActions
 from flaza.ui.components.login_config_form import LoginConfigForm
 
@@ -21,14 +22,18 @@ class SettingsPage:
         actions: UiActions,
         initial_login: LoginConfig,
         initial_window: WindowSettings,
+        initial_paths: PathsConfig,
         render: Callable[[], Awaitable[None]],
         on_close: Callable[[], Awaitable[None]],
+        on_open_plugins: Callable[[], Awaitable[None]],
     ) -> None:
         self._actions = actions
         self._initial_login = initial_login
         self._initial_window = initial_window
+        self._initial_paths = initial_paths
         self._render = render
         self._on_close = on_close
+        self._open_plugins = on_open_plugins
         self.form = LoginConfigForm(initial_login)
         self._theme_dropdown = CascadingDropdown(
             "选择主题",
@@ -41,12 +46,26 @@ class SettingsPage:
             width="180px",
         )
         self._theme_dropdown.value = initial_window.theme
+        self._plugins_dir_input = Input(value=initial_paths.plugins_dir, placeholder="./plugins")
         self._error = Text("", role="danger")
 
         save = Button("保存")
         save.on_click(self._on_save)
         cancel = Button("返回", variant="ghost")
         cancel.on_click(self._on_cancel)
+        browse_plugins = Button("浏览", variant="ghost")
+        browse_plugins.on_click(self._on_browse_plugins)
+        manage_plugins = Button("插件管理", variant="ghost", icon=icons.settings)
+        manage_plugins.on_click(self._on_open_plugins)
+
+        plugins_input_wrap = Div(
+            styles=Styles(flex_grow="1", min_width="0"),
+            container=[self._plugins_dir_input.build()],
+        )
+        plugins_dir_row = Div(
+            styles=Styles(display="flex", align_items="center", gap="8px"),
+            container=[plugins_input_wrap, browse_plugins.build()],
+        )
         login_section = VStack(
             Text("登录配置", size="14px", weight="600"),
             self.form.root,
@@ -60,6 +79,14 @@ class SettingsPage:
             gap="12px",
             align="stretch",
         ).build()
+        plugin_section = VStack(
+            Text("插件", size="14px", weight="600"),
+            Text("插件目录"),
+            plugins_dir_row,
+            manage_plugins,
+            gap="12px",
+            align="stretch",
+        ).build()
         actions_row = Div(
             styles=Styles(display="flex", justify_content="flex-end", gap="8px"),
             container=[cancel.build(), save.build()],
@@ -68,6 +95,7 @@ class SettingsPage:
             Heading("设置", level=1),
             login_section,
             app_section,
+            plugin_section,
             self._error,
             actions_row,
             gap="24px",
@@ -95,8 +123,11 @@ class SettingsPage:
             self._error.text = ""
             theme = cast(ThemeName, self._theme_dropdown.value)
             login = self.form.values()
+            plugins_dir = self._plugins_dir_input.value.strip()
             if theme != self._initial_window.theme:
                 await self._actions.save_theme(theme)
+            if plugins_dir != self._initial_paths.plugins_dir:
+                await self._actions.save_plugins_dir(plugins_dir)
             if login != self._initial_login:
                 self._actions.save_login_config(login)
                 return
@@ -109,3 +140,11 @@ class SettingsPage:
 
     async def _on_cancel(self, _event: DomEvent) -> None:
         await self._on_close()
+
+    async def _on_browse_plugins(self, _event: DomEvent) -> None:
+        folder = await self._actions.pick_plugins_dir()
+        if folder:
+            self._plugins_dir_input.value = folder
+
+    async def _on_open_plugins(self, _event: DomEvent) -> None:
+        await self._open_plugins()

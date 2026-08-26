@@ -29,6 +29,7 @@ from flaza.core.models import (
     TextElement,
     quote_preview_text,
 )
+from flaza.plugins.host import PluginSnapshot
 from flaza.ui.state import UiStateStore
 
 logger = logging.getLogger(__name__)
@@ -388,6 +389,38 @@ class UiActions:
         config = self._runtime.config.model_copy(update={"login": login})
         save_config(config)
         _restart_app()
+
+    # ---- 插件 ----
+
+    def list_plugins(self) -> tuple[PluginSnapshot, ...]:
+        """返回插件管理页需要的插件快照列表。"""
+        return self._runtime.plugins.snapshot()
+
+    async def reload_plugins(self) -> None:
+        """按当前配置重新发现并加载全部启用的插件。"""
+        await self._runtime.plugins.reload()
+
+    async def set_plugin_enabled(self, plugin_id: str, enabled: bool) -> None:
+        """持久化插件启停状态并立即重载。"""
+        await self._runtime.plugins.set_plugin_enabled(plugin_id, enabled)
+
+    async def save_plugins_dir(self, plugins_dir: str) -> None:
+        """保存插件目录并立即重载插件，无需重启应用。"""
+        plugins_dir = plugins_dir.strip()
+        if not plugins_dir:
+            raise ValueError("插件目录不能为空")
+        paths = self._runtime.config.paths.model_copy(update={"plugins_dir": plugins_dir})
+        config = self._runtime.config.model_copy(update={"paths": paths})
+        save_config(config)
+        self._runtime.config = config
+        await self._runtime.plugins.reload()
+
+    async def pick_plugins_dir(self) -> str | None:
+        """打开系统目录选择器；用户取消时返回 None。"""
+        return await self._runtime.select_folder(
+            title="选择插件目录",
+            default_dir=self._runtime.config.paths.plugins_dir,
+        )
 
     # ---- 内部方法 ----
 

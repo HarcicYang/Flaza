@@ -27,6 +27,7 @@ from flaza.core.models import (
 from flaza.core.ports import QQClient
 from flaza.core.services.media_cache import MediaCache
 from flaza.core.storage import Storage
+from flaza.plugins.registry import PluginExtensionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -40,16 +41,25 @@ class MessageService:
         storage: Storage,
         bus: EventBus,
         media_cache: MediaCache | None = None,
+        *,
+        plugin_registry: PluginExtensionRegistry | None = None,
     ) -> None:
         self._qq = qq
         self._storage = storage
         self._bus = bus
         self._media_cache = media_cache
+        self._plugin_registry = plugin_registry
         self._media_tasks: set[asyncio.Task[None]] = set()
         self._scheduled_media: set[tuple[str, int]] = set()
 
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         """通过协议端口发送消息，持久化并标记已读后发布 MessageSent。"""
+        if self._plugin_registry is not None:
+            filtered = await self._plugin_registry.run_outgoing_message_filters(target, elements)
+            if filtered is None:
+                logger.info("出站消息被插件过滤器中止: chat=%s", target.key)
+                raise RuntimeError("消息已被插件过滤器中止")
+            target, elements = filtered
         message = await self._qq.send_message(target, elements)
         return await self._persist_sent_message(message)
 
@@ -63,6 +73,12 @@ class MessageService:
 
     async def send_file(self, target: ChatTarget, path: str, filename: str | None = None) -> Message:
         """发送本地文件的便利方法。"""
+        if self._plugin_registry is not None:
+            filtered = await self._plugin_registry.run_outgoing_file_filters(target, path, filename)
+            if filtered is None:
+                logger.info("出站文件被插件过滤器中止: chat=%s", target.key)
+                raise RuntimeError("文件已被插件过滤器中止")
+            target, path, filename = filtered
         message = await self._qq.send_file(target, path, filename)
         return await self._persist_sent_message(message)
 
@@ -75,6 +91,9 @@ class MessageService:
 
     async def recall_message(self, target: ChatTarget, seq: int) -> None:
         """撤回自己发送的消息，并立即把撤回状态持久化与广播。"""
+        if self._plugin_registry is not None and not await self._plugin_registry.run_before_recall_hooks(target, seq):
+            logger.info("用户撤回被插件钩子中止: chat=%s seq=%s", target.key, seq)
+            return
         await self._qq.recall_message(target, seq)
         await self._storage.messages.mark_recalled(target, seq)
         self._bus.publish(MessageRecalled(chat=target, seq=seq, timestamp=int(time.time())))

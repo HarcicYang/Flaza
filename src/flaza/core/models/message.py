@@ -1,6 +1,6 @@
 """消息领域模型。"""
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -239,6 +239,22 @@ class UnknownElement(BaseModel):
         return self.display or "[未知消息]"
 
 
+class PluginElement(BaseModel):
+    """插件自定义消息元素。
+
+    ``payload`` 由插件自行定义并保持 JSON 可序列化；核心只负责持久化、
+    按注册的渲染器/发送器转发，不解释具体语义。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["plugin"] = "plugin"
+    plugin_id: str
+    element_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    preview_text: str = "[插件消息]"
+
+
 # 元素联合类型。旧数据库中的 TextElement 仍可被新联合正常解析，
 # 因此这是一次向后兼容的模型扩展，暂不提升 payload schema version。
 MessageElement = Annotated[
@@ -254,7 +270,8 @@ MessageElement = Annotated[
     | PokeElement
     | QuoteElement
     | ForwardElement
-    | UnknownElement,
+    | UnknownElement
+    | PluginElement,
     Field(discriminator="kind"),
 ]
 
@@ -289,6 +306,7 @@ class Message(BaseModel):
     elements: list[MessageElement]
     from_self: bool = False
     recalled: bool = False
+    retain_content_on_recall: bool = False
     sender_is_bot: bool = False
     sender_role: GroupMemberRole = GroupMemberRole.MEMBER
     reactions: list[MessageReaction] = []

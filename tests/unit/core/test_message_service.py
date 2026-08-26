@@ -21,10 +21,12 @@ from flaza.core.models import (
     QrCodeState,
     SelfInfo,
     SilentLoginResult,
+    TextElement,
 )
 from flaza.core.services import MessageService
 from flaza.core.services.media_cache import MediaCache
 from flaza.core.storage import Storage
+from flaza.plugins.registry import PluginExtensionRegistry
 
 
 class FakeQQ:
@@ -212,6 +214,116 @@ def test_send_image_passes_local_path_element(tmp_path: Path) -> None:
         assert isinstance(element, ImageElement)
         assert element.local_path == "/tmp/pic.png"
 
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_send_message_rewrites_via_outgoing_filter(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+        qq = FakeQQ()
+        registry = PluginExtensionRegistry()
+
+        async def rewrite(target: ChatTarget, elements: Sequence[MessageElement]):
+            return target, [TextElement(text="被插件改写")]
+
+        registry.register_outgoing_message_filter("demo", rewrite)
+        service = MessageService(qq, storage, EventBus(), plugin_registry=registry)
+
+        chat = FriendChat(uid="u_1", uin=10002)
+        await service.send_text(chat, "原文")
+
+        assert qq.sent_elements[0][0].text == "被插件改写"
+        recent = await storage.messages.list_recent(chat)
+        assert recent[0].message.text == "被插件改写"
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_send_message_aborts_when_filter_returns_none(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+        qq = FakeQQ()
+        registry = PluginExtensionRegistry()
+
+        async def block(target: ChatTarget, elements: Sequence[MessageElement]):
+            return None
+
+        registry.register_outgoing_message_filter("demo", block)
+        service = MessageService(qq, storage, EventBus(), plugin_registry=registry)
+
+        chat = FriendChat(uid="u_1", uin=10002)
+        try:
+            await service.send_text(chat, "原文")
+        except RuntimeError as exc:
+            assert "插件过滤器" in str(exc)
+        else:
+            raise AssertionError("过滤器返回 None 时应抛 RuntimeError")
+
+        assert qq.sent_elements == []
+        assert await storage.messages.list_recent(chat) == []
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_send_file_rewrites_via_outgoing_filter(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+        qq = FakeQQ()
+        registry = PluginExtensionRegistry()
+
+        async def rename(target: ChatTarget, path: str, filename: str | None):
+            return target, "/tmp/新路径.zip", "新文件.zip"
+
+        registry.register_outgoing_file_filter("demo", rename)
+        service = MessageService(qq, storage, EventBus(), plugin_registry=registry)
+
+        chat = FriendChat(uid="u_1", uin=10002)
+        await service.send_file(chat, "/tmp/原路径.zip", "原文件.zip")
+
+        assert qq.sent_files == [("/tmp/新路径.zip", "新文件.zip")]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_recall_message_can_be_blocked_by_plugin_hook(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+        chat = FriendChat(uid="u_1", uin=10002)
+        await storage.messages.insert(
+            Message(
+                chat=chat,
+                sender_uin=10001,
+                sender_uid="u_self",
+                seq=10,
+                timestamp=100,
+                elements=[TextElement(text="不能撤回")],
+                from_self=True,
+            )
+        )
+
+        registry = PluginExtensionRegistry()
+
+        async def keep(target: ChatTarget, seq: int):
+            return False
+
+        registry.register_before_recall_hook("demo", keep)
+        qq = FakeQQ()
+        service = MessageService(qq, storage, EventBus(), plugin_registry=registry)
+
+        await service.recall_message(chat, 10)
+
+        assert qq.recalled == []
+        recent = await storage.messages.list_recent(chat)
+        assert recent[0].message.recalled is False
         await storage.close()
 
     asyncio.run(scenario())

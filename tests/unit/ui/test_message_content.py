@@ -17,12 +17,14 @@ from flaza.core.models import (
     MarketFaceElement,
     Message,
     MessageReaction,
+    PluginElement,
     PokeElement,
     QuoteElement,
     TextElement,
     UnknownElement,
     VideoElement,
 )
+from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.ui.components.image_viewer import ImagePreview
 from flaza.ui.components.message_content import build_message_content
 
@@ -318,6 +320,37 @@ def test_unknown_element_renders_display_text() -> None:
 
     spans = [element for element in _walk(root) if isinstance(element, Span)]
     assert any(span.container and span.container[0] == "[卡片消息]" for span in spans)
+
+
+def test_plugin_element_uses_registered_renderer() -> None:
+    registry = PluginExtensionRegistry()
+    custom = Div(container=[Span(container=["插件内容"])])
+    registry.register_element("demo", "card", renderer=lambda element: custom)
+
+    root = build_message_content(
+        _message(PluginElement(plugin_id="demo", element_type="card", payload={"x": 1})),
+        plugin_registry=registry,
+    )
+
+    assert any(element is custom for element in _walk(root))
+
+
+def test_plugin_element_falls_back_when_unregistered_or_invalid() -> None:
+    registry = PluginExtensionRegistry()
+    registry.register_element("demo", "broken", renderer=lambda element: None)
+
+    unregistered = build_message_content(
+        _message(PluginElement(plugin_id="demo", element_type="missing", preview_text="[插件卡片]"))
+    )
+    invalid = build_message_content(
+        _message(PluginElement(plugin_id="demo", element_type="broken", preview_text="[坏插件]")),
+        plugin_registry=registry,
+    )
+
+    spans = [span for span in _walk(unregistered) if isinstance(span, Span)]
+    assert any(span.container and span.container[0] == "[插件卡片]" for span in spans)
+    spans = [span for span in _walk(invalid) if isinstance(span, Span)]
+    assert any(span.container and span.container[0] == "[坏插件]" for span in spans)
 
 
 def test_reaction_pill_shows_self_reacted_highlight() -> None:

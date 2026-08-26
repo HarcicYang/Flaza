@@ -2,10 +2,20 @@
 
 import asyncio
 
-from neony.dom import DOMElement, DomEvent
+from neony.dom import DOMElement, DomEvent, Span
 
 from flaza.config import AppConfig
-from flaza.core.models import FriendChat, GroupChat, Message, Session, StoredMessage, TextElement, VideoElement
+from flaza.core.models import (
+    FriendChat,
+    GroupChat,
+    Message,
+    PluginElement,
+    Session,
+    StoredMessage,
+    TextElement,
+    VideoElement,
+)
+from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.runtime import ApplicationRuntime
 from flaza.ui.components.message_list import MessageList
 from flaza.ui.components.session_list import SessionList
@@ -302,6 +312,52 @@ def test_recalled_notice_uses_you_for_self_messages() -> None:
     notice = messages.root.container[0]
     assert isinstance(notice, DOMElement)
     assert _element_text(notice) == "你撤回了一条消息"
+
+
+def test_recalled_message_keeps_content_when_retained() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    stored = _group_message(1, "一", 1)
+    retained = (
+        StoredMessage(
+            id=1,
+            message=stored.message.model_copy(update={"recalled": True, "retain_content_on_recall": True}),
+        ),
+    )
+    messages.set_messages(stored.message.chat, retained)
+
+    entry = messages._items["message:1"]
+    assert entry.bubble is not None
+    assert _element_text(entry.bubble._bubble.container[0]) == "一"
+    assert entry.kind == "message"
+
+
+def test_message_list_renders_plugin_elements_through_registry() -> None:
+    _runtime, state = _runtime_state()
+    registry = PluginExtensionRegistry()
+    registry.register_element(
+        "demo",
+        "card",
+        renderer=lambda element: Span(container=["插件动态"]),
+    )
+    messages = MessageList(state, plugin_registry=registry)
+    stored = StoredMessage(
+        id=1,
+        message=Message(
+            chat=GroupChat(group_id=10001),
+            sender_uin=10002,
+            sender_uid="u_2",
+            sender_name="张三",
+            seq=1,
+            timestamp=1,
+            elements=[PluginElement(plugin_id="demo", element_type="card", payload={})],
+        ),
+    )
+    messages.set_messages(stored.message.chat, (stored,))
+
+    entry = messages._items["message:1"]
+    assert entry.bubble is not None
+    assert _element_text(entry.bubble._bubble.container[0]) == "插件动态"
 
 
 def test_jump_button_follows_scroll_state() -> None:

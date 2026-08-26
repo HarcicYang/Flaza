@@ -20,6 +20,7 @@ from flaza.core.models import (
     Message,
     StoredMessage,
 )
+from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.ui.avatars import friend_avatar_url
 from flaza.ui.components.image_viewer import ImagePreview
 from flaza.ui.components.message_content import build_message_content
@@ -82,8 +83,10 @@ class MessageList:
         on_reaction_selected: Callable[[StoredMessage, str, int, bool], Awaitable[None]] | None = None,
         on_load_older: Callable[[], Awaitable[None]] | None = None,
         on_file_download: Callable[[FileElement], Awaitable[None]] | None = None,
+        plugin_registry: PluginExtensionRegistry | None = None,
     ) -> None:
         self._state = state
+        self._plugin_registry = plugin_registry
         self._on_image_click = on_image_click
         self._on_message_action = on_message_action
         self._on_reaction_selected = on_reaction_selected
@@ -322,6 +325,7 @@ class MessageList:
                         self._on_file_download,
                         on_reaction_click=on_reaction_click,
                         self_uid=self_uid,
+                        plugin_registry=self._plugin_registry,
                     )
                     # Reactions-only refresh: same in-place swap hazard as
                     # _replace_child — re-link parent pointers by hand.
@@ -379,6 +383,7 @@ class MessageList:
             self._on_file_download,
             on_reaction_click=self._make_reaction_pill_handler(stored, self_uid),
             self_uid=self_uid,
+            plugin_registry=self._plugin_registry,
         )
         if old_content is not None and _replace_child(bubble._bubble, old_content, new_content):
             return
@@ -414,7 +419,7 @@ class MessageList:
             return element, "notice", None, GroupMemberRole.MEMBER, None, None
 
         message = item.message
-        if message.recalled:
+        if message.recalled and not message.retain_content_on_recall:
             if message.from_self:
                 recalled_text = "你撤回了一条消息"
             else:
@@ -460,6 +465,7 @@ class MessageList:
                 self._on_file_download,
                 on_reaction_click=self._make_reaction_pill_handler(stored, self_uid),
                 self_uid=self_uid,
+                plugin_registry=self._plugin_registry,
             ),
             from_me=message.from_self,
             name=message.sender_name if isinstance(chat, GroupChat) and not message.from_self else None,

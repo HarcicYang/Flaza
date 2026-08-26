@@ -16,6 +16,7 @@ from flaza.core.models import (
     GroupMemberRole,
     ImageElement,
     Message,
+    PluginElement,
     PokeElement,
     TextElement,
 )
@@ -46,6 +47,7 @@ def test_storage_migrates_existing_database(tmp_path: Path) -> None:
         cursor = await storage.require_db().execute("PRAGMA table_info(messages)")
         columns = {row["name"] for row in await cursor.fetchall()}
         assert "recalled" in columns
+        assert "sender_uid" in columns
         cursor = await storage.require_db().execute("PRAGMA table_info(groups)")
         columns = {row["name"] for row in await cursor.fetchall()}
         assert "owner_uid" in columns
@@ -155,6 +157,56 @@ def test_update_payload_preserves_recalled_state(tmp_path: Path) -> None:
 
         stored = await storage.messages.list_recent(chat)
         assert stored[0].message.recalled is True
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_replace_message_swaps_full_domain_model(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+
+        chat = FriendChat(uid="u_1", uin=10001)
+        original = Message(
+            chat=chat,
+            sender_uin=10001,
+            sender_uid="u_1",
+            sender_name="小明",
+            seq=10,
+            timestamp=100,
+            elements=[TextElement(text="原文")],
+        )
+        await storage.messages.insert(original)
+
+        plugin_element = PluginElement(plugin_id="demo", element_type="card", payload={"x": 1})
+        updated = original.model_copy(
+            update={
+                "sender_uid": "u_plugin",
+                "sender_name": "插件改写",
+                "client_seq": 7,
+                "rand": 99,
+                "timestamp": 200,
+                "elements": [plugin_element],
+                "recalled": True,
+                "retain_content_on_recall": True,
+            }
+        )
+        replaced = await storage.messages.replace_message(updated)
+        assert replaced is not None
+        assert replaced.id > 0
+        assert replaced.message.sender_uid == "u_plugin"
+        assert replaced.message.sender_name == "插件改写"
+        assert replaced.message.client_seq == 7
+        assert replaced.message.rand == 99
+        assert replaced.message.recalled is True
+        assert replaced.message.retain_content_on_recall is True
+        assert replaced.message.elements == [plugin_element]
+        assert replaced.message.text == plugin_element.preview_text
+
+        stored = await storage.messages.list_recent(chat)
+        assert stored[0].message == replaced.message
+        assert await storage.messages.replace_message(original.model_copy(update={"seq": 999})) is None
         await storage.close()
 
     asyncio.run(scenario())

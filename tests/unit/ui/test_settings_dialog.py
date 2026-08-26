@@ -19,12 +19,17 @@ def _settings_page(
     async def default_close() -> None:
         return None
 
+    async def default_open_plugins() -> None:
+        return None
+
     return SettingsPage(
         runtime.actions,
         runtime.config.login,
         runtime.config.window,
+        runtime.config.paths,
         runtime.render,
         on_close or default_close,
+        default_open_plugins,
     )
 
 
@@ -34,6 +39,23 @@ def test_settings_page_contains_login_form_and_theme() -> None:
 
     assert page.form is not None
     assert page._theme_dropdown.value == "nightglow-dark"
+
+
+def test_settings_page_contains_plugin_directory_and_manager() -> None:
+    runtime = ApplicationRuntime(AppConfig())
+    page = _settings_page(runtime)
+
+    assert page._plugins_dir_input.value == "./plugins"
+    assert _contains_text(page.root, "插件管理")
+
+
+def _contains_text(element, text: str) -> bool:
+    for child in element.container:
+        if child == text:
+            return True
+        if hasattr(child, "container") and _contains_text(child, text):
+            return True
+    return False
 
 
 def test_save_theme_persists_config_and_applies_without_restart(monkeypatch: pytest.MonkeyPatch) -> None:

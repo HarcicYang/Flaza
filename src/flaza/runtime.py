@@ -34,6 +34,7 @@ from flaza.core.models import LoginPhase
 from flaza.core.services import AccountService, ContactService, GroupEventService, MessageService
 from flaza.core.services.media_cache import MediaCache
 from flaza.core.storage import Storage
+from flaza.plugins import PluginExtensionRegistry, PluginHost
 from flaza.qq.api import LagrangeQQClient
 from flaza.ui.actions import UiActions
 from flaza.ui.shell import ShellView
@@ -61,6 +62,8 @@ class ApplicationRuntime:
         self.storage = Storage()
         self.media_cache = MediaCache(config.paths.media_cache_dir)
         self.bus = EventBus()
+        self.plugin_registry = PluginExtensionRegistry()
+        self.plugins = PluginHost(self)
         self.state = UiStateStore(self.storage)
         self.actions = UiActions(self)
         self.shell = ShellView(self.state, self.actions, self.bus, self.config, self.render)
@@ -120,6 +123,17 @@ class ApplicationRuntime:
             return []
         return await self._neony_app.open_files(title=title, default_dir=default_dir, filetypes=filetypes)
 
+    async def select_folder(
+        self,
+        *,
+        title: str = "选择文件夹",
+        default_dir: str | None = None,
+    ) -> str | None:
+        """打开系统原生目录选择对话框；未挂载应用时返回 None。"""
+        if self._neony_app is None:
+            return None
+        return await self._neony_app.select_folder(title=title, default_dir=default_dir)
+
     async def save_file(
         self,
         *,
@@ -161,10 +175,12 @@ class ApplicationRuntime:
         await self.storage.init("flaza.db")
         await self.state.load_initial_state()
         self._bus_task = asyncio.create_task(self.bus.run(), name="flaza-event-bus")
+        await self.plugins.start()
         if self.config.login_configured:
             await self.start_qq()
 
     async def on_close(self) -> None:
+        await self.plugins.stop()
         await self._cancel_background_tasks()
         await self.stop_qq()
         if self._bus_task is not None:
@@ -179,11 +195,23 @@ class ApplicationRuntime:
         if self._qq is not None:
             return
 
-        qq = LagrangeQQClient(self.config.login, self.config.paths, self.bus, messages=self.storage.messages)
+        qq = LagrangeQQClient(
+            self.config.login,
+            self.config.paths,
+            self.bus,
+            messages=self.storage.messages,
+            plugin_registry=self.plugin_registry,
+        )
         account_service = AccountService(qq, self.bus)
         contact_service = ContactService(qq, self.storage, self.bus)
         group_event_service = GroupEventService(self.storage)
-        message_service = MessageService(qq, self.storage, self.bus, self.media_cache)
+        message_service = MessageService(
+            qq,
+            self.storage,
+            self.bus,
+            self.media_cache,
+            plugin_registry=self.plugin_registry,
+        )
 
         self._qq = qq
         self._account_service = account_service
