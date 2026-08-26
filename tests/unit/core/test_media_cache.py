@@ -3,6 +3,8 @@
 import asyncio
 from pathlib import Path
 
+import httpx
+
 from flaza.core.models import FriendChat, ImageElement, Message
 from flaza.core.services.media_cache import MediaCache
 
@@ -186,6 +188,52 @@ def test_cache_trim_keeps_total_under_limit(tmp_path: Path) -> None:
 
             total = sum(path.stat().st_size for path in tmp_path.rglob("*") if path.is_file())
             assert total <= 20
+        finally:
+            await http.close()
+
+    asyncio.run(scenario())
+
+
+def test_close_does_not_close_provided_client(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        client = httpx.AsyncClient()
+        cache = MediaCache(tmp_path, client=client)
+
+        await cache.close()
+        assert cache.http_client is client
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_http_client_is_reused_for_downloads(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        http = await _HttpFixture().start()
+        client = httpx.AsyncClient()
+        try:
+            cache = MediaCache(tmp_path, client=client)
+            message = _image_message(f"{http.base_url}/pic.png", md5=b"reuse")
+
+            await cache.cache_message(message)
+            assert cache.http_client is client
+            assert http.request_count == 1
+        finally:
+            await client.aclose()
+            await http.close()
+
+    asyncio.run(scenario())
+
+
+def test_failed_download_removes_partial_file(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        http = await _HttpFixture().start()
+        try:
+            cache = MediaCache(tmp_path)
+            message = _image_message(f"{http.base_url}/missing.png", md5=b"missing", cached_path="")
+            await cache.cache_message(message)
+
+            part_files = [path for path in tmp_path.rglob("*") if path.name.endswith(".part")]
+            assert part_files == []
         finally:
             await http.close()
 

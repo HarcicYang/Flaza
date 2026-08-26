@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import os
 import sys
-import urllib.request
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import httpx
 
 from flaza.config import AppConfig, LoginConfig, ThemeName, save_config
 from flaza.core.models import (
@@ -322,7 +322,8 @@ class UiActions:
         )
         if destination is None:
             return None
-        await asyncio.to_thread(_download_to_path, file.file_url, destination)
+        client = self._runtime.media_cache.http_client
+        await _download_to_path(client, file.file_url, destination)
         return destination
 
     async def _refresh_after_send_safely(self, chat: ChatTarget, state: UiStateStore) -> None:
@@ -436,20 +437,18 @@ def _restart_app() -> None:
     os.execv(python, [python, "-m", "flaza"])
 
 
-def _download_to_path(url: str, destination: str) -> None:
+async def _download_to_path(client: httpx.AsyncClient, url: str, destination: str) -> None:
     """把远程文件下载到指定路径；先写临时文件再替换，失败时不留下半个文件。"""
     target = Path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f"{target.name}.flaza-download")
 
     try:
-        request = urllib.request.Request(url, headers={"User-Agent": "Flaza/0.1"})
-        with urllib.request.urlopen(request, timeout=60) as response, temporary.open("wb") as file:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                file.write(chunk)
+        async with client.stream("GET", url) as response:
+            response.raise_for_status()
+            with temporary.open("wb") as file:
+                async for chunk in response.aiter_bytes(1024 * 1024):
+                    file.write(chunk)
     except Exception:
         with contextlib.suppress(FileNotFoundError):
             temporary.unlink()

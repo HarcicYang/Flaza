@@ -171,6 +171,7 @@ class ApplicationRuntime:
             self._bus_task.cancel()
             await asyncio.gather(self._bus_task, return_exceptions=True)
             self._bus_task = None
+        await self.media_cache.close()
         await self.storage.close()
 
     async def start_qq(self) -> None:

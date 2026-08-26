@@ -11,7 +11,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlparse
-from urllib.request import Request, urlopen
+
+import httpx
 
 from flaza.core.models import (
     AudioElement,
@@ -27,7 +28,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_MAX_FILE_BYTES = 512 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 60.0
-DEFAULT_CONCURRENCY = 2
+DEFAULT_CONCURRENCY = 8
+_DEFAULT_CHUNK_BYTES = 64 * 1024
 
 _USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Flaza/0.1"
 _FALLBACK_EXTENSION = {
@@ -60,6 +62,7 @@ class MediaCache:
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         concurrency: int = DEFAULT_CONCURRENCY,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self._root = Path(root).resolve()
         self._max_total_bytes = max_total_bytes
@@ -67,6 +70,8 @@ class MediaCache:
         self._timeout_seconds = timeout_seconds
         self._semaphore = asyncio.Semaphore(max(1, concurrency))
         self._inflight: dict[str, asyncio.Task[str | None]] = {}
+        self._client_provided = client is not None
+        self._client = client
 
     def has_cacheable_media(self, message: Message) -> bool:
         """消息是否包含可下载到本地缓存的媒体元素。"""
@@ -197,13 +202,34 @@ class MediaCache:
     async def _download_job(self, job: _MediaJob) -> str | None:
         async with self._semaphore:
             try:
-                path = await asyncio.to_thread(self._download_sync, job)
+                path = await self._download_async(job)
                 if path is not None:
                     await asyncio.to_thread(self._trim_if_needed)
                 return path
             except Exception:
                 logger.debug("媒体缓存下载失败: kind=%s url=%s", job.kind, job.url, exc_info=True)
                 return None
+
+    async def close(self) -> None:
+        """关闭内部 Http 客户端连接；由业务方在应用退出时调用。"""
+        if self._client_provided or self._client is None:
+            return
+        await self._client.aclose()
+        self._client = None
+
+    def _http_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=self._timeout_seconds,
+                headers={"User-Agent": _USER_AGENT},
+                follow_redirects=True,
+            )
+        return self._client
+
+    @property
+    def http_client(self) -> httpx.AsyncClient:
+        """返回共享的异步 HTTP 客户端，供手动文件下载等场景复用连接池。"""
+        return self._http_client()
 
     def _find_existing(self, job: _MediaJob) -> str | None:
         if job.cached_path:
@@ -219,26 +245,23 @@ class MediaCache:
                 return str(candidate)
         return None
 
-    def _download_sync(self, job: _MediaJob) -> str | None:
+    async def _download_async(self, job: _MediaJob) -> str | None:
         directory, digest = self._cache_dir(job.kind, job.key)
         directory.mkdir(parents=True, exist_ok=True)
         temp_path = directory / f".{digest}.{os.getpid()}.part"
-
-        request = Request(job.url, headers={"User-Agent": _USER_AGENT})
+        client = self._http_client()
         try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:
-                content_type = response.headers.get_content_type()
-                content_length = response.headers.get("Content-Length")
+            async with client.stream("GET", job.url) as response:
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "")
+                content_length = response.headers.get("content-length")
                 if content_length and int(content_length) > self._max_file_bytes:
                     logger.debug("媒体超过单文件缓存上限，跳过: url=%s size=%s", job.url, content_length)
                     return None
 
                 size = 0
                 with temp_path.open("wb") as file:
-                    while True:
-                        chunk = response.read(min(64 * 1024, self._max_file_bytes - size + 1))
-                        if not chunk:
-                            break
+                    async for chunk in response.aiter_bytes(_DEFAULT_CHUNK_BYTES):
                         size += len(chunk)
                         if size > self._max_file_bytes:
                             raise _FileTooLarge(job.url, size)
