@@ -82,29 +82,6 @@ QQ 桌面客户端。
 
 - [ ] 插件系统
 - [ ] 动画效果
-- [ ] 富文本输入：等 Neony 提供 caret / 光标插入能力后，重做无感图文混排
-
-## JavaScript 调用移除计划
-
-项目原则： **Flaza 业务代码不手写任何 JavaScript**。当前仍有一处历史遗留：
-
-- `src/flaza/ui/actions.py` 的 `scroll_chat_to_bottom()` 通过
-  `ApplicationRuntime.eval_js()` 读取并设置消息列表的
-  `scrollTop / scrollHeight`，用于发送消息和打开会话后滚动到底部。
-
-移除前提（需要在 Neony 中实现）：
-
-1. Python 侧滚动控制能力，例如
-   `DOMElement.scroll_to_bottom()` / `scroll_to_top()` 或通用的
-   `scroll_to(options)`；
-2. 或提供“贴底滚动容器”组件：内容增长时自动保持底部，用户上翻时 自动暂停贴底。
-
-移除步骤：
-
-1. 等 Neony 能力落地后，替换 `UiActions.scroll_chat_to_bottom()`
-   的内部实现，不再拼接 JS 字符串；
-2. 删除 `ApplicationRuntime.eval_js()` 代理及其调用点；
-3. 同步更新 `docs/design-decisions.md` 中第 7 节的相关描述。
 
 ## 快速开始
 
