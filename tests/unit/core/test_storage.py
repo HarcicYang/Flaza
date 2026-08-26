@@ -301,6 +301,13 @@ def test_storage_messages_contacts_and_sessions(tmp_path: Path) -> None:
         recent_one = await storage.messages.list_recent(friend_chat, limit=1)
         assert [stored.message.text for stored in recent_one] == ["第二条"]
 
+        combined, has_older = await storage.messages.list_recent_with_has_before(friend_chat)
+        assert [stored.message.text for stored in combined] == ["你好", "第二条"]
+        assert has_older is False
+        combined_one, has_older_one = await storage.messages.list_recent_with_has_before(friend_chat, limit=1)
+        assert [stored.message.text for stored in combined_one] == ["第二条"]
+        assert has_older_one is True
+
         assert await storage.messages.latest_id(friend_chat) == friend_id_2
         assert await storage.messages.latest_seq(friend_chat) == 11
         assert await storage.messages.list_before(friend_chat, friend_id) == []
@@ -318,6 +325,8 @@ def test_storage_messages_contacts_and_sessions(tmp_path: Path) -> None:
         assert sessions[1].unread_count == 0
 
         assert await storage.sessions.unread_count(GroupChat(group_id=20002)) == 1
+        await storage.messages.mark_all_read(GroupChat(group_id=20002))
+        assert await storage.sessions.unread_count(GroupChat(group_id=20002)) == 0
 
         state = UiStateStore(storage)
         await state.load_initial_state()

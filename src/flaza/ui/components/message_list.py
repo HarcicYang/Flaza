@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from neony.application import icons
-from neony.application.elements import Avatar, Badge, Button, MessageBubble, NoticeBubble, StickToBottom
+from neony.application.elements import Avatar, Badge, Button, Icon, MessageBubble, NoticeBubble, StickToBottom
 from neony.application.theme import stub
 from neony.dom import Border, Computed, DOMElement, DomEvent, Signal, Span, Styles, Transition
 
@@ -94,6 +94,8 @@ class MessageList:
         self._loading_older = False
         self._items: dict[str, _RenderedItem] = {}
         self._ordered_keys: list[str] = []
+        self._prebuilt_items: dict[str, tuple[list[str], dict[str, _RenderedItem]]] = {}
+        self._scroll_positions: dict[str, int] = {}
         self._chat_key: str | None = None
         self._placeholder: DOMElement | None = None
         self._stick = StickToBottom()
@@ -116,6 +118,25 @@ class MessageList:
         self.jump_button.args["title"] = "回到底部"
         self.jump_button.args["aria-label"] = "回到底部"
         self.jump_button.bind_visible(Computed(lambda: not self.at_bottom()))
+
+    def prebuild_messages(self, chat: ChatTarget, messages: tuple[StoredMessage, ...]) -> None:
+        """后台为会话预建气泡，切换时直接复用，避免全量重建 DOM。"""
+        ordered_keys: list[str] = []
+        items: dict[str, _RenderedItem] = {}
+        for stored in messages:
+            key = f"message:{stored.id}"
+            element, kind, message, role, avatar_src, bubble = self._build_item(stored, chat)
+            items[key] = _RenderedItem(
+                key=key,
+                element=element,
+                kind=kind,
+                message=message,
+                role=role,
+                avatar_src=avatar_src,
+                bubble=bubble,
+            )
+            ordered_keys.append(key)
+        self._prebuilt_items[chat.key] = (ordered_keys, items)
 
     def set_messages(
         self,
@@ -159,7 +180,7 @@ class MessageList:
             self._update_existing(timeline, chat)
             return
 
-        # list_recent 到达 50 条上限后，最旧一条被挤出、最新一条追加。
+        # 最近消息分页到达上限后，最旧一条被挤出、最新一条追加。
         # 至少保留一个共享元素才构成“平移”，否则退化为整体替换。
         if len(desired_keys) == len(old_keys) and len(old_keys) >= 2 and desired_keys[:-1] == old_keys[1:]:
             self._remove_first()
@@ -192,6 +213,16 @@ class MessageList:
         timeline = self._build_timeline(chat, messages, notices)
         if not timeline:
             self._ensure_placeholder("还没有消息，发一句打个招呼吧")
+            return
+
+        desired_keys = [self._item_key(item) for item in timeline]
+        prebuilt = self._prebuilt_items.get(self._chat_key or "")
+        if prebuilt is not None and prebuilt[0] == desired_keys:
+            self._items = dict(prebuilt[1])
+            self._ordered_keys = list(prebuilt[0])
+            for key in self._ordered_keys:
+                self.root.container.append(self._items[key].element)
+            self._update_existing(timeline, chat)
             return
 
         for item in timeline:
@@ -284,6 +315,8 @@ class MessageList:
 
             stored = item
             message = stored.message
+            if entry.kind == "recalled" and entry.message is not None and entry.message == message:
+                continue
             desired_role = self._resolve_role(chat, message)
             desired_avatar = self._avatar_src(message)
             if (
@@ -447,9 +480,9 @@ class MessageList:
         self_info = self._state.self_info()
         self_uid = self_info.uid if self_info else None
         stored = item
-        actions = [icons.chat, icons.favorite]
+        actions: list[Icon | tuple[str, str]] = [icons.chat, icons.favorite]
         if self._plugin_registry is not None:
-            actions.extend((entry.key, entry.label) for entry in self._plugin_registry.message_actions())
+            actions.extend([(entry.key, entry.label) for entry in self._plugin_registry.message_actions()])
         bubble = MessageBubble(
             text=message.text,
             content=build_message_content(
@@ -552,7 +585,19 @@ class MessageList:
 
     async def scroll_to_bottom(self, *, force: bool = False) -> None:
         """滚动到底部；``force=True`` 忽略贴底状态强制滚动。"""
+        if force and self._chat_key is not None:
+            self._scroll_positions.pop(self._chat_key, None)
         await self._stick.scroll_to_bottom(force=force)
+
+    async def restore_scroll(self, chat_key: str) -> None:
+        """恢复到该会话上次离开时的阅读位置；没有记录时回到底部。"""
+        top = self._scroll_positions.get(chat_key)
+        if top is None:
+            await self.scroll_to_bottom(force=True)
+            return
+        coro = self._stick._call_js(f'window.neony.scrollTo({self._stick._key()}, {top}, "auto")')
+        if coro is not None:
+            await coro
 
     def _make_scroll_handler(self, callback: Callable[[], Awaitable[None]]):
         async def handler(event: DomEvent) -> None:
@@ -576,6 +621,11 @@ class MessageList:
         if top is None or height is None or client is None:
             return
         at_bottom = top + client >= height - 80
+        if self._chat_key is not None:
+            if at_bottom:
+                self._scroll_positions.pop(self._chat_key, None)
+            else:
+                self._scroll_positions[self._chat_key] = max(0, int(top))
         if at_bottom != self.at_bottom():
             self.at_bottom.set(at_bottom)
 

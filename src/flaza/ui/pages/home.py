@@ -129,6 +129,7 @@ class HomePage:
             on_file_download=self._on_file_download,
             plugin_registry=self._plugin_registry,
         )
+        state.set_chat_prebuilder(self.message_list.prebuild_messages)
         self.toast = Toast(placement="top-right", duration=3.0, top_offset="40px")
         self.composer = Composer(actions, render, on_error=self._show_error)
 
@@ -193,6 +194,8 @@ class HomePage:
             self._state.group_roles(),
             self._state.self_info(),
         )
+        if self._state.state_refresh_suppressed:
+            return
         self._schedule_state_refresh()
 
     def _schedule_state_refresh(self) -> None:
@@ -375,6 +378,10 @@ class HomePage:
         await self._actions.open_chat(chat)
         # 更新 Composer 的群成员上下文（用于 @ 提及）
         await self._update_composer_context(chat)
+        if self._actions.current_config().window.chat_open_position == "last":
+            await self.message_list.restore_scroll(chat.key)
+        else:
+            await self.message_list.scroll_to_bottom(force=True)
 
     async def _update_composer_context(self, chat: ChatTarget) -> None:
         """根据当前会话更新 Composer 的草稿与群成员上下文。"""

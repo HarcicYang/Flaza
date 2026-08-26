@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from flaza.config import AppConfig, LoginConfig, ThemeName, save_config
+from flaza.config import AppConfig, ChatOpenPosition, LoginConfig, ThemeName, save_config
 from flaza.core.models import (
     AtAllElement,
     AtElement,
@@ -30,7 +30,7 @@ from flaza.core.models import (
     quote_preview_text,
 )
 from flaza.plugins.host import PluginSnapshot
-from flaza.ui.state import UiStateStore
+from flaza.ui.state import CHAT_MESSAGE_PAGE_SIZE, UiStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -68,22 +68,25 @@ class UiActions:
 
     async def open_chat(self, chat: ChatTarget) -> None:
         state = self._runtime.state
-        state.active_chat.set(chat)
-        state.active_chat_title.set(self._chat_title(chat))
+        with state.suppress_state_refresh():
+            state.active_chat.set(chat)
+            state.active_chat_title.set(self._chat_title(chat))
 
-        stored = await self._runtime.storage.messages.list_recent(chat)
-        if isinstance(chat, GroupChat):
-            await self._ensure_visible_group_roles(chat, stored)
-        state.messages.set(tuple(stored))
-        state.has_older_messages.set(
-            bool(stored) and await self._runtime.storage.messages.has_before(chat, stored[0].id)
-        )
-        message_service = self._message_service()
-        if message_service is not None:
-            message_service.schedule_media_cache([stored.message for stored in stored])
-        await self.mark_chat_read(chat)
-        await state.refresh_sessions()
-        await self.refresh_chat_view()
+            snapshot = state.peek_chat_messages(chat)
+            if snapshot is None:
+                snapshot = await state.refresh_chat_messages(chat)
+            stored = list(snapshot.messages)
+            if isinstance(chat, GroupChat):
+                await self._ensure_visible_group_roles(chat, stored)
+            state.messages.set(snapshot.messages)
+            state.has_older_messages.set(snapshot.has_older)
+            message_service = self._message_service()
+            if message_service is not None:
+                message_service.schedule_media_cache([stored.message for stored in stored])
+            await self._runtime.storage.messages.mark_all_read(chat)
+            state.clear_chat_unread(chat)
+        # 滚动策略由 HomePage 在会话打开流程末尾统一处理。
+        await self.refresh_chat_view(force_scroll=False)
 
     async def _ensure_visible_group_roles(self, chat: GroupChat, messages: list[StoredMessage]) -> None:
         known = self._runtime.state.group_roles()
@@ -293,7 +296,7 @@ class UiActions:
             return
 
         first_id = current[0].id
-        older = await self._runtime.storage.messages.list_before(chat, first_id)
+        older = await self._runtime.storage.messages.list_before(chat, first_id, limit=CHAT_MESSAGE_PAGE_SIZE)
         if not older:
             state.has_older_messages.set(False)
             await self.refresh_chat_view(force_scroll=False)
@@ -336,32 +339,27 @@ class UiActions:
             logger.exception("发送后刷新聊天视图失败: chat=%s", chat.key)
 
     async def _refresh_after_send(self, chat: ChatTarget, state: UiStateStore) -> None:
-        stored = await self._runtime.storage.messages.list_recent(chat)
-        state.messages.set(tuple(stored))
-        state.has_older_messages.set(
-            bool(stored) and await self._runtime.storage.messages.has_before(chat, stored[0].id)
-        )
-        await self.mark_chat_read(chat)
+        snapshot = await state.refresh_chat_messages(chat)
+        state.messages.set(snapshot.messages)
+        state.has_older_messages.set(snapshot.has_older)
+        await self._runtime.storage.messages.mark_all_read(chat)
+        state.clear_chat_unread(chat)
         await state.refresh_sessions()
-        logger.info("发送消息后刷新聊天视图: chat=%s count=%s", chat.key, len(stored))
+        logger.info("发送消息后刷新聊天视图: chat=%s count=%s", chat.key, len(snapshot.messages))
         await self.refresh_chat_view(force_scroll=True)
 
     async def _refresh_chat_messages(self, chat: ChatTarget) -> None:
         """重新加载当前会话最近消息，不改变滚动位置。"""
         state = self._runtime.state
-        stored = await self._runtime.storage.messages.list_recent(chat)
-        state.messages.set(tuple(stored))
-        state.has_older_messages.set(
-            bool(stored) and await self._runtime.storage.messages.has_before(chat, stored[0].id)
-        )
+        snapshot = await state.refresh_chat_messages(chat)
+        state.messages.set(snapshot.messages)
+        state.has_older_messages.set(snapshot.has_older)
         await state.refresh_sessions()
         await self.refresh_chat_view(force_scroll=False)
 
     async def mark_chat_read(self, chat: ChatTarget) -> None:
-        latest_id = await self._runtime.storage.messages.latest_id(chat)
-        if latest_id is not None:
-            await self._runtime.storage.messages.mark_read(chat, latest_id)
-            await self._runtime.state.refresh_sessions()
+        await self._runtime.storage.messages.mark_all_read(chat)
+        await self._runtime.state.refresh_sessions()
 
     async def refresh_sessions(self) -> None:
         await self._runtime.state.refresh_sessions()
@@ -383,6 +381,13 @@ class UiActions:
         save_config(config)
         self._runtime.config = config
         await self._runtime.set_theme(theme)
+
+    async def save_chat_open_position(self, position: ChatOpenPosition) -> None:
+        """保存打开会话时的滚动位置策略并立即生效。"""
+        window = self._runtime.config.window.model_copy(update={"chat_open_position": position})
+        config = self._runtime.config.model_copy(update={"window": window})
+        save_config(config)
+        self._runtime.config = config
 
     def save_login_config(self, login: LoginConfig) -> None:
         """保存登录配置并重启应用，让新配置在下一次启动时生效。"""

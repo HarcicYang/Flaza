@@ -65,7 +65,7 @@ def test_recall_keep_example_preserves_content_and_swallows_event(tmp_path: Path
 
         assert stored.message.recalled is True
         assert stored.message.retain_content_on_recall is True
-        assert stored.message.text == "这条内容不允许被撤回（已撤回·内容由示例插件保留）"
+        assert stored.message.text == "（已撤回）这条内容不允许被撤回"
 
         ui_message = runtime.state.messages()[0].message
         assert ui_message.recalled is True

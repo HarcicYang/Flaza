@@ -9,7 +9,7 @@ from neony.application import icons
 from neony.application.elements import Button, CascadingDropdown, Heading, Input, MenuBranch, Text, VStack
 from neony.dom import Animation, Div, DomEvent, Styles
 
-from flaza.config import LoginConfig, PathsConfig, ThemeName, WindowSettings
+from flaza.config import ChatOpenPosition, LoginConfig, PathsConfig, ThemeName, WindowSettings
 from flaza.ui.actions import UiActions
 from flaza.ui.components.login_config_form import LoginConfigForm
 
@@ -46,6 +46,15 @@ class SettingsPage:
             width="180px",
         )
         self._theme_dropdown.value = initial_window.theme
+        self._chat_open_position_dropdown = CascadingDropdown(
+            "打开会话位置",
+            items=(
+                ("last", "上次位置"),
+                ("bottom", "自动回到底部"),
+            ),
+            width="180px",
+        )
+        self._chat_open_position_dropdown.value = initial_window.chat_open_position
         self._plugins_dir_input = Input(value=initial_paths.plugins_dir, placeholder="./plugins")
         self._error = Text("", role="danger")
 
@@ -76,6 +85,8 @@ class SettingsPage:
             Text("应用设置", size="14px", weight="600"),
             Text("主题"),
             self._theme_dropdown,
+            Text("打开会话位置"),
+            self._chat_open_position_dropdown,
             gap="12px",
             align="stretch",
         ).build()
@@ -122,10 +133,13 @@ class SettingsPage:
             self.form.set_error("")
             self._error.text = ""
             theme = cast(ThemeName, self._theme_dropdown.value)
+            position = cast(ChatOpenPosition, self._chat_open_position_dropdown.value)
             login = self.form.values()
             plugins_dir = self._plugins_dir_input.value.strip()
             if theme != self._initial_window.theme:
                 await self._actions.save_theme(theme)
+            if position != self._initial_window.chat_open_position:
+                await self._actions.save_chat_open_position(position)
             if plugins_dir != self._initial_paths.plugins_dir:
                 await self._actions.save_plugins_dir(plugins_dir)
             if login != self._initial_login:

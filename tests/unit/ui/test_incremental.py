@@ -2,6 +2,7 @@
 
 import asyncio
 
+import pytest
 from neony.dom import DOMElement, DomEvent, Span
 
 from flaza.config import AppConfig
@@ -135,6 +136,19 @@ def test_message_list_appends_new_message_without_rebuilding() -> None:
     assert len(messages.root.container) == 3
     assert messages.root.container[0] is old_els[0]
     assert messages.root.container[1] is old_els[1]
+
+
+def test_message_list_reuses_prebuilt_items_on_switch() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    chat = FriendChat(uid="u_1", uin=10001)
+    stored = (_message(chat, 1, "一", 1), _message(chat, 2, "二", 2))
+
+    messages.prebuild_messages(chat, stored)
+    prebuilt = [messages._prebuilt_items[chat.key][1][f"message:{item.id}"].element for item in stored]
+
+    messages.set_messages(chat, stored)
+    assert list(messages.root.container) == prebuilt
 
 
 def test_message_list_keeps_bubble_when_only_media_cache_changes() -> None:
@@ -427,6 +441,39 @@ def test_jump_button_follows_scroll_state() -> None:
     asyncio.run(messages._on_scroll_at_bottom(back_to_bottom))
     assert messages.at_bottom() is True
     assert messages.jump_button.styles.display == "none"
+
+
+def test_message_list_remembers_and_restores_last_scroll_position(monkeypatch: pytest.MonkeyPatch) -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    chat = FriendChat(uid="u_1", uin=10001)
+    messages.set_messages(chat, (_message(chat, 1, "一", 1),))
+
+    scrolled_up = DomEvent(key="message-list", type="scroll", scroll_top=240, client_height=400, scroll_height=1200)
+    asyncio.run(messages._on_scroll_at_bottom(scrolled_up))
+    assert messages._scroll_positions[chat.key] == 240
+
+    back_to_bottom = DomEvent(
+        key="message-list",
+        type="scroll",
+        scroll_top=1100,
+        client_height=400,
+        scroll_height=1200,
+    )
+    asyncio.run(messages._on_scroll_at_bottom(back_to_bottom))
+    assert chat.key not in messages._scroll_positions
+
+    asyncio.run(messages._on_scroll_at_bottom(scrolled_up))
+    captured: list[str] = []
+
+    async def fake_call_js(script: str) -> None:
+        captured.append(script)
+
+    monkeypatch.setattr(messages._stick, "_call_js", fake_call_js)
+    asyncio.run(messages.restore_scroll(chat.key))
+    assert len(captured) == 1
+    assert "scrollTo" in captured[0]
+    assert "240" in captured[0]
 
 
 def test_quick_actions_float_beside_bubble() -> None:

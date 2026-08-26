@@ -70,6 +70,33 @@ class MessageRepository:
         """返回最近 limit 条消息，按时间正序（可直接用于聊天流）。"""
         return await self._list_latest(chat, limit, before_id=None)
 
+    async def list_recent_with_has_before(
+        self,
+        chat: ChatTarget,
+        limit: int = 50,
+    ) -> tuple[list[StoredMessage], bool]:
+        """最近消息与“是否还能加载更早”一次查询返回。"""
+        query_limit = max(0, limit)
+        if query_limit == 0:
+            return [], False
+
+        chat_kind, chat_id = _chat_columns(chat)
+        cursor = await self._db.execute(
+            """
+            SELECT id, payload FROM (
+                SELECT id, payload FROM messages
+                WHERE chat_kind = ? AND chat_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+            ) ORDER BY id ASC
+            """,
+            (chat_kind, chat_id, query_limit + 1),
+        )
+        rows = await cursor.fetchall()
+        has_before = len(rows) > query_limit
+        rows = rows[-query_limit:]
+        return [StoredMessage(id=int(row["id"]), message=decode_message(row["payload"])) for row in rows], has_before
+
     async def list_before(self, chat: ChatTarget, before_id: int, limit: int = 50) -> list[StoredMessage]:
         """返回指定本地 id 之前的更早消息，按时间正序。"""
         return await self._list_latest(chat, limit, before_id=before_id)
@@ -380,6 +407,23 @@ class MessageRepository:
             WHERE read_cursors.last_read_id < excluded.last_read_id
             """,
             (chat_kind, chat_id, last_read_id),
+        )
+        await self._db.commit()
+
+    async def mark_all_read(self, chat: ChatTarget) -> None:
+        """把会话已读游标直接推进到最新消息。"""
+        chat_kind, chat_id = _chat_columns(chat)
+        await self._db.execute(
+            """
+            INSERT INTO read_cursors (chat_kind, chat_id, last_read_id)
+            SELECT ?, ?, COALESCE(MAX(id), 0)
+            FROM messages
+            WHERE chat_kind = ? AND chat_id = ?
+            ON CONFLICT (chat_kind, chat_id) DO UPDATE SET
+                last_read_id = excluded.last_read_id
+            WHERE read_cursors.last_read_id < excluded.last_read_id
+            """,
+            (chat_kind, chat_id, chat_kind, chat_id),
         )
         await self._db.commit()
 

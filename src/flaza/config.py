@@ -21,6 +21,8 @@ ThemeName = Literal[
     "cyberangel-light",
 ]
 
+ChatOpenPosition = Literal["last", "bottom"]
+
 _LEGACY_THEMES: dict[str, ThemeName] = {
     "dark": "nightglow-dark",
     "light": "nightglow-light",
@@ -49,6 +51,7 @@ class PathsConfig(BaseModel):
     device_info_path: str = "./device.json"
     sign_info_path: str = "./sig.bin"
     media_cache_dir: str = "./media_cache"
+    chat_cache_path: str = "./chat_cache.json"
     plugins_dir: str = "./plugins"
     plugin_state_path: str = "./plugin_state.json"
 
@@ -62,6 +65,7 @@ class WindowSettings(BaseModel):
     width: int = 960
     height: int = 640
     theme: ThemeName = "nightglow-dark"
+    chat_open_position: ChatOpenPosition = "bottom"
     devtools: bool = False
 
 

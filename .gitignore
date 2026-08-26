@@ -42,6 +42,7 @@ Thumbs.db
 # Flaza runtime data
 appconfig.json
 flaza.db
+chat_cache.json
 media_cache/
 
 .account-backup/

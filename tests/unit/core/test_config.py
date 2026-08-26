@@ -15,6 +15,7 @@ def test_load_config_creates_default_file(tmp_path: Path) -> None:
     assert config.paths.media_cache_dir == "./media_cache"
     assert path.exists()
     assert config.window.theme == "nightglow-dark"
+    assert config.window.chat_open_position == "bottom"
 
 
 def test_load_config_migrates_legacy_theme(tmp_path: Path) -> None:
@@ -35,10 +36,14 @@ def test_login_configured_requires_uin_and_signer_url() -> None:
 
 def test_save_and_load_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "appconfig.json"
-    config = AppConfig(login={"uin": 123456}, window={"width": 1280, "height": 800})
+    config = AppConfig(
+        login={"uin": 123456},
+        window={"width": 1280, "height": 800, "chat_open_position": "last"},
+    )
     save_config(config, path)
 
     loaded = load_config(path)
     assert loaded.login.uin == 123456
     assert loaded.window.width == 1280
     assert loaded.window.height == 800
+    assert loaded.window.chat_open_position == "last"

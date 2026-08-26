@@ -39,6 +39,11 @@ def test_settings_page_contains_login_form_and_theme() -> None:
 
     assert page.form is not None
     assert page._theme_dropdown.value == "nightglow-dark"
+    assert page._chat_open_position_dropdown.value == "bottom"
+    assert page._chat_open_position_dropdown._label_by_value == {
+        "last": "上次位置",
+        "bottom": "自动回到底部",
+    }
 
 
 def test_settings_page_contains_plugin_directory_and_manager() -> None:
@@ -99,6 +104,27 @@ def test_save_theme_returns_to_previous_page(monkeypatch: pytest.MonkeyPatch) ->
         page._theme_dropdown.value = "planet-plaza-light"
         await page._on_save(None)  # type: ignore[arg-type]
         assert closed is True
+
+    asyncio.run(scenario())
+
+
+def test_save_chat_open_position_persists_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = ApplicationRuntime(AppConfig())
+    saved: list[AppConfig] = []
+
+    def fake_save(config: AppConfig) -> None:
+        saved.append(config)
+
+    monkeypatch.setattr(actions_module, "save_config", fake_save)
+
+    async def scenario() -> None:
+        await runtime.actions.save_chat_open_position("last")
+        assert runtime.config.window.chat_open_position == "last"
+        assert runtime.actions.current_config().window.chat_open_position == "last"
+        assert saved[-1].window.chat_open_position == "last"
+
+        reopened = _settings_page(runtime)
+        assert reopened._chat_open_position_dropdown.value == "last"
 
     asyncio.run(scenario())
 

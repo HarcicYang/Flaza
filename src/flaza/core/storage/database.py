@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_chat_time
     ON messages (chat_kind, chat_id, timestamp DESC, id DESC);
 
+CREATE INDEX IF NOT EXISTS idx_messages_chat_id
+    ON messages (chat_kind, chat_id, id DESC);
+
 CREATE TABLE IF NOT EXISTS pending_group_reactions (
     group_id     INTEGER NOT NULL,
     seq          INTEGER NOT NULL,

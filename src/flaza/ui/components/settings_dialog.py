@@ -6,7 +6,7 @@ from typing import cast
 
 from neony.application.elements import CascadingDropdown, Dialog, DialogAction, MenuBranch, ScrollArea, Text, VStack
 
-from flaza.config import LoginConfig, ThemeName, WindowSettings
+from flaza.config import ChatOpenPosition, LoginConfig, ThemeName, WindowSettings
 from flaza.ui.actions import UiActions
 from flaza.ui.components.login_config_form import LoginConfigForm
 
@@ -30,6 +30,15 @@ class SettingsDialog:
             width="160px",
         )
         self._theme_dropdown.value = initial_window.theme
+        self._chat_open_position_dropdown = CascadingDropdown(
+            "打开会话位置",
+            items=(
+                ("last", "上次位置"),
+                ("bottom", "自动回到底部"),
+            ),
+            width="160px",
+        )
+        self._chat_open_position_dropdown.value = initial_window.chat_open_position
         self._error = Text("", role="danger")
 
         form_content = VStack(
@@ -38,6 +47,8 @@ class SettingsDialog:
             Text("应用设置", size="14px", weight="600"),
             Text("主题"),
             self._theme_dropdown,
+            Text("打开会话位置"),
+            self._chat_open_position_dropdown,
             self._error,
             gap="12px",
             align="stretch",
@@ -62,10 +73,13 @@ class SettingsDialog:
             self._error.text = ""
 
             theme = cast(ThemeName, self._theme_dropdown.value)
+            position = cast(ChatOpenPosition, self._chat_open_position_dropdown.value)
             login = self.form.values()
 
             if theme != self._initial_window.theme:
                 await self._actions.save_theme(theme)
+            if position != self._initial_window.chat_open_position:
+                await self._actions.save_chat_open_position(position)
             if login != self._initial_login:
                 # 登录配置生效需要重启；save_theme 已把新主题写入 runtime.config。
                 self._actions.save_login_config(login)

@@ -64,7 +64,7 @@ class ApplicationRuntime:
         self.bus = EventBus()
         self.plugin_registry = PluginExtensionRegistry()
         self.plugins = PluginHost(self)
-        self.state = UiStateStore(self.storage)
+        self.state = UiStateStore(self.storage, chat_cache_path=config.paths.chat_cache_path)
         self.actions = UiActions(self)
         self.shell = ShellView(self.state, self.actions, self.bus, self.config, self.render)
 
@@ -187,6 +187,7 @@ class ApplicationRuntime:
             self._bus_task.cancel()
             await asyncio.gather(self._bus_task, return_exceptions=True)
             self._bus_task = None
+        await self.state.close_chat_messages_cache()
         await self.media_cache.close()
         await self.storage.close()
 
