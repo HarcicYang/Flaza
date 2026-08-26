@@ -8,6 +8,7 @@ import importlib.machinery
 import importlib.util
 import logging
 import re
+import shutil
 import sys
 from collections.abc import Awaitable
 from dataclasses import dataclass
@@ -152,9 +153,10 @@ class PluginHost:
         module_package = ""
         try:
             entry_path = _resolve_entry(candidate.path, manifest.entry)
+            _clear_bytecode_caches(candidate.path)
             module_package = _make_plugin_package(manifest.id, candidate.path)
             module_name = _module_name(module_package, entry_path, candidate.path)
-            module = importlib.import_module(module_name)
+            module = _import_entry_module(module_name, entry_path)
             plugin = getattr(module, "plugin", None)
             if not isinstance(plugin, FlazaPlugin):
                 raise TypeError("插件入口没有导出 FlazaPlugin 实例（模块级 plugin）")
@@ -222,11 +224,39 @@ def _make_plugin_package(plugin_id: str, plugin_dir: Path) -> str:
     return package_name
 
 
+def _import_entry_module(module_name: str, entry_path: Path) -> ModuleType:
+    """从入口文件直接构建模块，不依赖 sys.modules 里可能残留的旧模块。"""
+    importlib.invalidate_caches()
+    loader = _DiskSourceLoader(module_name, str(entry_path))
+    spec = importlib.util.spec_from_file_location(module_name, entry_path, loader=loader)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载插件入口: {entry_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class _DiskSourceLoader(importlib.machinery.SourceFileLoader):
+    """始终重新编译插件源码，绕开可能过期的 .pyc 缓存。"""
+
+    def get_code(self, fullname: str) -> Any:
+        source = self.get_data(self.path)
+        return compile(source, self.path, "exec", dont_inherit=True)
+
+
 def _purge_module_tree(module_package: str) -> None:
     prefix = f"{module_package}."
     for name in list(sys.modules):
         if name == module_package or name.startswith(prefix):
             sys.modules.pop(name, None)
+
+
+def _clear_bytecode_caches(plugin_dir: Path) -> None:
+    """每次加载都清掉插件目录内的 .pyc 缓存，强制从源码重新编译。"""
+    for path in plugin_dir.rglob("__pycache__"):
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def _module_name(module_package: str, entry_path: Path, plugin_dir: Path) -> str:

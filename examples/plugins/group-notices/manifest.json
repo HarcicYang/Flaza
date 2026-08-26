@@ -1,0 +1,9 @@
+{
+  "id": "group-notices",
+  "name": "群事件播报",
+  "version": "0.1.0",
+  "entry": "main.py",
+  "author": "Flaza",
+  "description": "把群成员加入、退出、管理员变化、禁言和群名变更替换为带成员名的详细播报。",
+  "dependencies": []
+}

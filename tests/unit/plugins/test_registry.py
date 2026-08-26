@@ -2,12 +2,26 @@
 
 import asyncio
 
-from flaza.core.models import FriendChat, PluginElement, TextElement
+from flaza.core.models import FriendChat, Message, PluginElement, StoredMessage, TextElement
 from flaza.plugins.registry import PluginExtensionRegistry
 
 
 def _chat() -> FriendChat:
     return FriendChat(uid="u_1", uin=10001)
+
+
+def _stored() -> StoredMessage:
+    return StoredMessage(
+        id=1,
+        message=Message(
+            chat=_chat(),
+            sender_uin=10001,
+            sender_uid="u_1",
+            seq=1,
+            timestamp=1,
+            elements=[TextElement(text="原文")],
+        ),
+    )
 
 
 def test_message_filters_rewrite_then_abort() -> None:
@@ -145,6 +159,7 @@ def test_remove_plugin_cleans_all_registrations() -> None:
         registry.register_outgoing_file_filter("demo", keep)
         registry.register_before_recall_hook("demo", block_recall)
         registry.register_element("demo", "card", renderer=lambda item: "card")
+        registry.register_message_action("demo", "send", lambda item: None, label="+1")
 
         registry.remove_plugin("demo")
 
@@ -152,5 +167,44 @@ def test_remove_plugin_cleans_all_registrations() -> None:
         assert (await registry.run_outgoing_file_filters(chat, "p", None)) is not None
         assert await registry.run_before_recall_hooks(chat, 1) is True
         assert registry.render_plugin_element(PluginElement(plugin_id="demo", element_type="card")) is None
+        assert await registry.run_message_action("demo", "send", _stored()) is False
+
+    asyncio.run(scenario())
+
+
+def test_message_action_registration_dispatch_and_dispose() -> None:
+    async def scenario() -> None:
+        registry = PluginExtensionRegistry()
+        stored = _stored()
+        seen: list[int] = []
+
+        async def handler(item: StoredMessage) -> None:
+            seen.append(item.id)
+
+        registration = registry.register_message_action("demo", "send", handler, label="+1")
+        actions = registry.message_actions()
+        assert len(actions) == 1
+        assert actions[0].label == "+1"
+        assert actions[0].key == "plugin:demo:send"
+
+        assert await registry.run_message_action("demo", "send", stored) is True
+        assert seen == [1]
+
+        registration.dispose()
+        assert registry.message_actions() == ()
+        assert await registry.run_message_action("demo", "send", stored) is False
+
+    asyncio.run(scenario())
+
+
+def test_message_action_exception_is_isolated() -> None:
+    async def scenario() -> None:
+        registry = PluginExtensionRegistry()
+
+        async def broken(_item: StoredMessage) -> None:
+            raise RuntimeError("boom")
+
+        registry.register_message_action("demo", "send", broken)
+        assert await registry.run_message_action("demo", "send", _stored()) is False
 
     asyncio.run(scenario())

@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from flaza.core.models import ChatTarget, MessageElement, PluginElement
+from flaza.core.models import ChatTarget, MessageElement, PluginElement, StoredMessage
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ ElementSender = Callable[
     [ChatTarget, PluginElement],
     tuple[Any, MessageElement] | Awaitable[tuple[Any, MessageElement]],
 ]
+MessageActionHandler = Callable[[StoredMessage], Awaitable[object]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,18 @@ class _ElementEntry:
     plugin_id: str
     renderer: ElementRenderer | None
     sender: ElementSender | None
+
+
+@dataclass(frozen=True, slots=True)
+class _MessageActionEntry:
+    plugin_id: str
+    action: str
+    label: str
+    handler: MessageActionHandler
+
+    @property
+    def key(self) -> str:
+        return f"plugin:{self.plugin_id}:{self.action}"
 
 
 class Registration:
@@ -69,6 +82,7 @@ class PluginExtensionRegistry:
         self._file_filters: list[_OrderedEntry] = []
         self._recall_hooks: list[_OrderedEntry] = []
         self._elements: dict[tuple[str, str], _ElementEntry] = {}
+        self._message_actions: dict[tuple[str, str], _MessageActionEntry] = {}
         self._order = 0
 
     # ---- 过滤器与动作钩子 ----
@@ -98,6 +112,25 @@ class PluginExtensionRegistry:
         entry = _OrderedEntry(plugin_id, self._next_order(), handler)
         self._recall_hooks.append(entry)
         return Registration(lambda: _remove_entry(self._recall_hooks, entry))
+
+    def register_message_action(
+        self,
+        plugin_id: str,
+        action: str,
+        handler: MessageActionHandler,
+        *,
+        label: str | None = None,
+    ) -> Registration:
+        """注册气泡快捷动作按钮；action 在插件命名空间内唯一。"""
+        entry = _MessageActionEntry(plugin_id, action, label or action, handler)
+        key = (plugin_id, action)
+        self._message_actions[key] = entry
+
+        def dispose() -> None:
+            if self._message_actions.get(key) is entry:
+                del self._message_actions[key]
+
+        return Registration(dispose)
 
     async def run_outgoing_message_filters(
         self,
@@ -203,6 +236,28 @@ class PluginExtensionRegistry:
             )
             raise RuntimeError(f"插件消息段发送失败: {element.plugin_id}/{element.element_type}") from exc
 
+    # ---- 消息快捷动作 ----
+
+    def message_actions(self) -> tuple[_MessageActionEntry, ...]:
+        """按注册顺序返回全部插件快捷动作。"""
+        return tuple(self._message_actions.values())
+
+    async def run_message_action(self, plugin_id: str, action: str, stored: StoredMessage) -> bool:
+        """执行插件快捷动作；未注册或异常返回 False。"""
+        entry = self._message_actions.get((plugin_id, action))
+        if entry is None:
+            return False
+        try:
+            await _maybe_await(entry.handler(stored))
+        except Exception:
+            logger.exception(
+                "消息快捷动作异常: plugin=%s action=%s",
+                plugin_id,
+                action,
+            )
+            return False
+        return True
+
     # ---- 清理 ----
 
     def remove_plugin(self, plugin_id: str) -> None:
@@ -212,6 +267,8 @@ class PluginExtensionRegistry:
         self._recall_hooks = [entry for entry in self._recall_hooks if entry.plugin_id != plugin_id]
         for key in [key for key in self._elements if key[0] == plugin_id]:
             self._elements.pop(key, None)
+        for key in [key for key in self._message_actions if key[0] == plugin_id]:
+            self._message_actions.pop(key, None)
 
     def _next_order(self) -> int:
         order = self._order

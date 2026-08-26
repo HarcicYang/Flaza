@@ -1,0 +1,9 @@
+{
+  "id": "plus-one",
+  "name": "复读 +1",
+  "version": "0.1.0",
+  "entry": "main.py",
+  "author": "Flaza",
+  "description": "在消息气泡的快捷动作中增加 +1 按钮，点击后发送与原消息完全相同的消息。",
+  "dependencies": []
+}

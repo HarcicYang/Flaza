@@ -480,6 +480,39 @@ def test_quick_actions_use_icon_values_and_map_to_reply_reaction() -> None:
     asyncio.run(scenario())
 
 
+def test_message_list_renders_plugin_quick_action_and_routes_value() -> None:
+    _runtime, state = _runtime_state()
+    registry = PluginExtensionRegistry()
+    registry.register_message_action("demo", "send", lambda item: None, label="+1")
+    messages = MessageList(state, plugin_registry=registry)
+    stored = _group_message(1, "你好", 1)
+    messages.set_messages(stored.message.chat, (stored,))
+
+    bubble = messages._items["message:1"].bubble
+    assert bubble is not None
+    plugin_button = next(
+        button
+        for button in bubble._actions.container
+        if isinstance(button, DOMElement) and bubble._action_by_key.get(button.key) == "plugin:demo:send"
+    )
+    assert _element_text(plugin_button) == "+1"
+
+    async def scenario() -> None:
+        captured: list[tuple[str, int]] = []
+
+        async def on_action(value: str, item: StoredMessage) -> None:
+            captured.append((value, item.id))
+
+        friend_stored = _message(FriendChat(uid="u_9", uin=10009), 1, "hi", 1)
+        friend_list = MessageList(state, plugin_registry=registry, on_message_action=on_action)
+        friend_list.set_messages(friend_stored.message.chat, (friend_stored,))
+        handler = friend_list._make_action_handler(friend_stored, _reaction_picker())
+        await handler("plugin:demo:send")
+        assert captured == [("plugin:demo:send", 1)]
+
+    asyncio.run(scenario())
+
+
 def _reaction_picker():
     from flaza.ui.components.reaction_picker import ReactionPicker
 

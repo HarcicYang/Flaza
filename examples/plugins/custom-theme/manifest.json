@@ -1,0 +1,9 @@
+{
+  "id": "custom-theme",
+  "name": "自定义主题",
+  "version": "0.1.0",
+  "entry": "main.py",
+  "author": "Flaza",
+  "description": "加载时用插件设置覆盖一组 CSS 颜色变量，卸载时恢复内置主题。",
+  "dependencies": []
+}

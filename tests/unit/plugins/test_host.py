@@ -117,3 +117,55 @@ plugin = Good()
         await host.stop()
 
     asyncio.run(scenario())
+
+
+def test_host_reload_reads_plugin_files_from_disk_each_time(tmp_path) -> None:
+    plugins_dir = tmp_path / "plugins"
+    _write_plugin(
+        plugins_dir,
+        "demo",
+        """
+from . import helper
+from flaza.plugins import FlazaPlugin
+
+
+class Demo(FlazaPlugin):
+    pass
+
+
+plugin = Demo()
+value = helper.value
+""",
+    )
+    plugin_dir = plugins_dir / "demo"
+    (plugin_dir / "helper.py").write_text("value = 1\n", encoding="utf-8")
+
+    runtime = ApplicationRuntime(_make_config(tmp_path, plugins_dir))
+    host = PluginHost(runtime)
+
+    async def scenario() -> None:
+        await host.start()
+        assert sys.modules["flaza_plugin_demo.main"].value == 1
+
+        (plugin_dir / "helper.py").write_text("value = 2\n", encoding="utf-8")
+        (plugin_dir / "main.py").write_text(
+            """
+from . import helper
+from flaza.plugins import FlazaPlugin
+
+
+class Demo(FlazaPlugin):
+    pass
+
+
+plugin = Demo()
+value = helper.value + 10
+""",
+            encoding="utf-8",
+        )
+        await host.reload()
+
+        assert sys.modules["flaza_plugin_demo.main"].value == 12
+        await host.stop()
+
+    asyncio.run(scenario())

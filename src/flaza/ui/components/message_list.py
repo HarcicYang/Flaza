@@ -447,6 +447,9 @@ class MessageList:
         self_info = self._state.self_info()
         self_uid = self_info.uid if self_info else None
         stored = item
+        actions = [icons.chat, icons.favorite]
+        if self._plugin_registry is not None:
+            actions.extend((entry.key, entry.label) for entry in self._plugin_registry.message_actions())
         bubble = MessageBubble(
             text=message.text,
             content=build_message_content(
@@ -461,7 +464,7 @@ class MessageList:
             name=message.sender_name if isinstance(chat, GroupChat) and not message.from_self else None,
             avatar=avatar,
             menu_items=menu_items,
-            actions=[icons.chat, icons.favorite],
+            actions=actions,
         )
         # 动作行悬浮到气泡侧面的空白槽（他人的消息在右、自己的在左），
         # 垂直居中且始终落在本行高度内，避免悬停时遮挡下方消息。

@@ -249,6 +249,12 @@ class HomePage:
             elif value == "reply":
                 self.composer.set_reply_to(stored)
                 await self._render()
+            elif value.startswith("plugin:"):
+                _, plugin_id, action = value.split(":", 2)
+                if self._plugin_registry is None:
+                    raise RuntimeError("插件系统未启用")
+                if not await self._plugin_registry.run_message_action(plugin_id, action, stored):
+                    raise RuntimeError(f"插件动作不可用: {plugin_id}:{action}")
         except Exception:
             logger.exception(
                 "消息菜单动作失败: action=%s chat=%s seq=%s",

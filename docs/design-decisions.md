@@ -159,7 +159,8 @@
   `PluginState` 以根目录 `plugin_state.json`（`enabled`、`disabled`、`settings`、
   `kv`）持久化，`PluginHost` 在存储与 EventBus 就绪后启动、退出时先于 QQ 停止；
   插件入口导出模块级 `plugin` 实例，插件目录以 `flaza_plugin_<id>` 命名空间包
-  动态导入，支持插件内相对导入与跨插件包导入。
+  动态导入，支持插件内相对导入与跨插件包导入；每次加载或重新加载都会清理旧
+  模块缓存，并从磁盘上的入口文件直接重建模块，编辑插件代码后无需重启应用。
 - M1 已落地的事件扩展：`EventBus` 支持优先级排序以及 `subscribe_before` /
   `subscribe_after`；`PluginContext` 提供 `publish`、`subscribe`、
   `before_event`、`after_event`，前置处理器可返回替换事件或用 `None` 吞掉事件。
@@ -188,3 +189,10 @@
 - M2 已落地的插件管理 UI：设置页新增插件目录输入与原生目录选择入口，
   并提供独立的「插件管理」页面；页面列出已发现插件，显示启用/加载状态，
   支持逐个启用或禁用、重新加载与目录热切换，无需重启应用。
+- M3 已落地的消息快捷动作扩展：`PluginExtensionRegistry` 增加
+  `register_message_action`，插件可为气泡 actions 注册带独立命名空间的
+  按钮；`MessageList` 按注册顺序渲染，`HomePage` 路由到
+  `run_message_action`，未注册或异常时在 UI 显示操作失败。
+- M3 示例插件：`group-notices/` 演示接管群事件并写入详细播报；
+  `plus-one/` 演示消息快捷动作与整元素序列复读；
+  `custom-theme/` 演示用 `eval_js` 注入 CSS 变量并在卸载时恢复。

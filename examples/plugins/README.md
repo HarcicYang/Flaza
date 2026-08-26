@@ -6,13 +6,20 @@
 | 目录 | 说明 |
 | --- | --- |
 | `recall-keep/` | 收到撤回事件时保留本地消息内容，并标记为已撤回。 |
+| `group-notices/` | 群成员进出、管理员、禁言与群名变更的详细播报。 |
+| `plus-one/` | 在消息气泡快捷动作中增加 +1 按钮，原样复读消息。 |
+| `custom-theme/` | 加载时覆盖 CSS 颜色变量，卸载时恢复内置主题。 |
 
 ## 使用
 
 ```bash
 mkdir -p plugins
-cp -r examples/plugins/recall-keep plugins/
+cp -r examples/plugins/recall-keep examples/plugins/group-notices plugins/
+cp -r examples/plugins/plus-one examples/plugins/custom-theme plugins/
 ```
 
 插件默认启用；程序运行后会自动生成 `plugin_state.json`，可通过其中的
 `settings` 调整示例插件行为。
+
+`plus-one` 依赖消息气泡快捷动作扩展点，`custom-theme` 依赖
+`ctx.runtime.eval_js`，其余示例仅使用插件公开 API。

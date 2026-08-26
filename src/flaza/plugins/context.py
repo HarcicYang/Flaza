@@ -18,6 +18,7 @@ from flaza.core.models import ChatTarget, Friend, Group, Message, MessageElement
 from flaza.plugins.registry import (
     ElementRenderer,
     ElementSender,
+    MessageActionHandler,
     OutgoingFileFilter,
     OutgoingMessageFilter,
     PluginExtensionRegistry,
@@ -145,6 +146,23 @@ class PluginContext:
             element_type,
             renderer=renderer,
             sender=sender,
+        )
+        self._registrations.add(registration)
+        return registration
+
+    def register_message_action(
+        self,
+        action: str,
+        handler: MessageActionHandler,
+        *,
+        label: str | None = None,
+    ) -> Registration:
+        """注册消息气泡快捷动作；点击后由宿主调用 handler(stored)。"""
+        registration = self.registry.register_message_action(
+            self.plugin_id,
+            action,
+            handler,
+            label=label,
         )
         self._registrations.add(registration)
         return registration
