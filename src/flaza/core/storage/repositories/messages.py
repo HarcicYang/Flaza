@@ -92,7 +92,7 @@ class MessageRepository:
             """,
             (chat_kind, chat_id, query_limit + 1),
         )
-        rows = await cursor.fetchall()
+        rows = list(await cursor.fetchall())
         has_before = len(rows) > query_limit
         rows = rows[-query_limit:]
         return [StoredMessage(id=int(row["id"]), message=decode_message(row["payload"])) for row in rows], has_before
