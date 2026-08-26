@@ -1,96 +1,33 @@
 # Flaza
 
-> 状态： **WIP** —— 早期开发中，功能可能随时变化，暂不建议作为唯一客户端长期使用。 ~~（啊后半句是不是废话）~~
+非官方 QQ 桌面客户端，使用 Python编写，由
+[lagrange-python](https://github.com/LagrangeDev/lagrange-python) [^1] 和
+[Neony](https://github.com/HarcicYang/Neony) 驱动。
 
-基于 [lagrange-python](https://github.com/LagrangeDev/lagrange-python) 和 [Neony](https://github.com/HarcicYang/Neony) 的
-QQ 桌面客户端。
+目前项目仍处于早期开发阶段，功能与数据格式可能会继续调整。
 
-> Flaza 是非官方 QQ 客户端，与腾讯公司无关。本项目仅供学习与技术交流，
-> 使用者应遵守所在地法律法规及 QQ 服务条款，并自行承担账号及相关风险。
-> 详见 [免责声明](#免责声明)
+## 项目亮点
 
-## 功能覆盖
+- **Tauri 同源的系统 Webview 与 Rust 内核的 GUI** : 更小的储存空间占用和潜力丰富的性能
+- **丰富的主题系统** : 四类八种丰富主题
+- **强力拓展** : 高度自由的插件系统，翻修覆写不在话下
 
-<details>
-<summary>消息类型</summary>
+## 项目进度与规划
 
-| 类型                 | 接收 | 发送 | 说明                                      |
-|----------------------|------|------|-------------------------------------------|
-| 文本                 | ✅   | ✅   | 支持多行文本                              |
-| 图片                 | ✅   | ✅   | 本地缓存，data URL 展示；图文块可自由排序 |
-| 商城表情             | ✅   | ❌   | 图片展示                                  |
-| 语音                 | ✅   | ❌   | 原生播放器或占位卡                        |
-| 视频                 | ✅   | ❌   | 原生播放器或占位卡                        |
-| 文件                 | ✅   | ✅   | 支持发送、下载与拖拽；卡片/右键可下载     |
-| @ / @全体成员        | ✅   | ❌   | 高亮文本                                  |
-| 回复引用             | ✅   | ❌   | 背景深度区分                              |
-| QQ 内置表情          | 🚧   | ❌   | 当前为占位标签                            |
-| 戳一戳               | ✅   | ❌   | 卡片展示                                  |
-| 合并转发             | 🚧   | ❌   | 仅卡片，暂不展开                          |
-| 卡片 / JSON / 按钮等 | 🚧   | ❌   | 统一占位卡，保留原始类型                  |
+核心功能已经可用：登录与消息收发、本地持久化、媒体缓存、群事件、表情回应、
+历史消息分页、会话草稿与未读计数、会话切换缓存与后台预取、多主题和插件管理 。
 
-</details>
-
-<details>
-<summary>事件类型</summary>
-
-| 事件                | 状态 | 说明                |
-|---------------------|------|---------------------|
-| 好友消息            | ✅   | 进入会话并持久化    |
-| 群消息              | ✅   | 进入会话并持久化    |
-| 好友 / 群撤回       | ✅   | 标记消息并显示灰条  |
-| 群名变更            | ✅   | 灰条 + 会话标题更新 |
-| 群成员加入          | ✅   | 灰条                |
-| 群成员退出 / 被移出 | ✅   | 灰条                |
-| 管理员变更          | ✅   | 灰条 + 身份更新     |
-| 禁言                | ✅   | 单人 / 全员禁言灰条 |
-| 登录阶段变化        | ✅   | 驱动页面切换        |
-| 连接状态变化        | ✅   | 标题栏展示          |
-| 联系人 / 群成员同步 | ✅   | 登录后后台同步      |
-| 离线消息同步完成    | ✅   | 刷新会话与消息      |
-| 好友申请            | ❌   | 未接入              |
-| 群申请 / 群邀请     | ❌   | 未接入              |
-
-</details>
-
-<details>
-<summary>操作类型</summary>
-
-| 操作             | 状态 | 说明                                                                |
-|------------------|------|---------------------------------------------------------------------|
-| 静默登录         | ✅   | 已有会话时自动登录                                                  |
-| 扫码登录         | ✅   | 二维码内嵌展示                                                      |
-| 密码登录         | ❌   | 未规划                                                              |
-| 打开 / 新建会话  | ✅   | 好友与群                                                            |
-| 发送文本消息     | ✅   | 回车发送                                                            |
-| 图片全屏预览     | ✅   | 全画布缩放/平移；Ctrl+滚轮缩放、滚轮平移、拖拽、1:1、双击、Esc 关闭 |
-| 发送图片         | ✅   | 图文块编辑器：文字/图片自由排序、粘贴图片、拖拽添加                 |
-| 发送文件         | ✅   | 输入栏 + 入口、粘贴路径/URL 或拖拽发送本地文件                      |
-| 文件下载         | ✅   | 文件卡片「下载」按钮或右键菜单，系统保存对话框                      |
-| 撤回自己的消息   | ✅   | 右键消息气泡撤回                                                    |
-| 复制消息         | ✅   | 右键消息气泡复制文本                                                |
-| 删除消息         | ❌   | 本地删除未接入                                                      |
-| 向上加载历史消息 | ✅   | 滚动到顶部自动加载更早消息，增量前置不重建                          |
-| 修改登录配置     | ✅   | 保存后重启                                                          |
-| 切换主题         | ✅   | 即时生效，持久化                                                    |
-| 管理媒体缓存     | ❌   | 自动下载 + LRU，无手动入口                                          |
-| 处理好友申请     | ❌   | 未接入                                                              |
-
-</details>
-
-## TODO
-
-- [ ] 插件系统
-- [ ] 动画效果
+- **待完善**：语音、视频、商城表情与 QQ 内置表情发送；合并转发内容展开； 
+更多结构化卡片渲染；媒体缓存的可视化手动管理...
+- **规划中**：本地删除消息；更方便的分发与更新...
 
 ## 快速开始
 
-要求：
+运行要求：
 
 - Python 3.12
-- [uv](https://github.com/astral-sh/uv)
-- [lagrange-python](https://github.com/LagrangeDev/lagrange-python) [^1][^2]
-- Lagrange V2 签名服务（部署与配置见 [签名指南](https://github.com/LagrangeDev/SignApiGuide)）
+- uv ( 可选 )
+- [Lagrange V2 签名服务](https://github.com/LagrangeDev/SignApiGuide) [^2]
 
 ```bash
 uv sync
@@ -98,41 +35,113 @@ uv sync --group dev  # 开发环境
 uv run flaza
 ```
 
-首次启动时会在界面内引导填写登录配置；`签名服务地址` 与 `签名服务 token` 请按上述签名指南填写，保存后应用自动重启。
+首次启动时会进入登录配置页，填写 `uin`、协议、签名服务地址与 token；
+保存后应用会自动重启并尝试登录， 已有设备数据时静默登录，否则在页面中展示二维码
+扫码确认后进入主界面。
 
-## 运行时数据
+## 插件系统
 
-| 路径                      | 用途                               | 是否入库 |
-|---------------------------|------------------------------------|----------|
-| `appconfig.json`          | 登录、协议、窗口与媒体缓存路径配置 | 否       |
-| `flaza.db`                | 联系人、会话、消息与已读游标       | 否       |
-| `media_cache/`            | 下载到本地的消息媒体文件           | 否       |
-| `device.json` / `sig.bin` | QQ 设备信息与会话签名              | 否       |
+Flaza 的插件是加载进应用进程的 Python 模块。插件可以注册新的消息段、事件和
+[气泡动作](https://harcic.me/neony/zh/api/components.html#messagebubble)，
+也可以改写出站消息、拦截主动撤回、向会话写入灰条，或直接通过
+`ctx.runtime` 触碰应用内部对象。
 
-媒体缓存默认目录为 `./media_cache`，总量上限 2 GiB，单文件上限 512 MiB，下载并发 2，超时 60 秒。
+一个插件就是一个目录：
 
-## 常用开发命令
+```text
+plugins/
+  my-plugin/
+    manifest.json
+    main.py
+```
+
+```json
+{
+  "id": "my-plugin",
+  "name": "示例插件",
+  "version": "0.1.0",
+  "entry": "main.py",
+  "author": "Sakuraba Ema",
+  "description": "Hiro-chan, Hiro-chan!",
+  "dependencies": []
+}
+```
+
+入口文件应当导出模块级 `plugin` 实例：
+
+```python
+from flaza.plugins import FlazaPlugin, PluginContext
+
+
+class MyPlugin(FlazaPlugin):
+    async def on_load(self, context: PluginContext) -> None:
+        await context.notify("user:114514", "插件已加载")
+
+
+plugin = MyPlugin()
+```
+
+`dependencies` 声明依赖后，宿主只在启动时检查并警告，不会自动安装也不会阻止
+加载。插件可以随时从设置页启用、禁用、重新加载或切换目录，编辑代码后无需重启
+应用。仓库里提供了可直接复制的示例：
+
+- `recall-keep`：收到撤回事件时保留消息内容并标记为已撤回
+- `group-notices`：把群事件播报成更详细的灰条
+- `plus-one`：在消息气泡上增加 `+1` 按钮，原样复读消息
+- `custom-theme`：加载时覆盖 CSS 变量，卸载时恢复内置主题
+
+完整说明见 [examples/plugins/README.md](examples/plugins/README.md)
+
+## 架构
+
+Flaza 把协议、领域与界面分成四个主要区域：
+
+```text
+src/flaza/app.py      应用组装与桌面入口
+src/flaza/core/       领域模型、事件、服务与存储
+src/flaza/qq/         唯一允许导入 lagrange 的协议适配层
+src/flaza/ui/         Neony 界面、状态投影与用户动作
+src/flaza/plugins/    插件宿主、扩展注册表与插件 API
+```
+
+所有模块共享同一个 asyncio 事件循环：协议适配层发布领域事件，服务层处理业务，
+UI 状态层把事件投影到 Neony 的可绑定信号，插件则通过事件总线与扩展注册表接入
+任意环节。
+
+运行时数据全部在本地：
+
+- `appconfig.json`：登录、协议、路径、窗口与主题配置
+- `flaza.db`：联系人、会话、消息、群成员与已读游标
+- `chat_cache.json`：最近消息快照，用于跨启动复用的快速会话切换
+- `plugin_state.json`：插件启停状态、设置与 KV
+- `media_cache/`：下载到本地的消息媒体文件
+
+## 开发
 
 ```bash
 uv run ruff format --check .
 uv run ruff check .
 uv run pyrefly check
 uv run pytest -q
-uv build
 uv run flaza
 ```
 
-架构与协作约定见 [docs/design-decisions.md](docs/design-decisions.md)。
+落地细节、取舍和后续计划记录在 [docs/design-decisions.md](docs/design-decisions.md)。
+
+## License
+
+GPL-3.0，见 [LICENSE](LICENSE)。
 
 ## 免责声明
 
-- 本项目为非官方 QQ 客户端，与其公司等无任何关联。
-- 项目仅供学习、研究和技术交流，请勿用于任何违反法律法规或 QQ 服务条款的用途。
-- 使用者应自行确认其使用方式符合所在国家或地区的法律要求，并自行承担账号安全、数据丢失、功能受限等一切风险。
-- 项目作者与贡献者不支持、不鼓励一切将本项目用作大批量自动信息提取、恶意自动操作、或者其他不符合法律法规和公序良俗的行为，若您执意将本项目或本项目作者的其他有关项目用作以上行为，由您自行承担有关风险和后果。
+- Flaza 是非官方 QQ 客户端，与腾讯公司无任何关联。
+- 项目仅供学习、研究和技术交流，请勿用于违反法律法规或 QQ 服务条款的用途。
+- 使用者应自行确认使用方式符合所在地法律，并自行承担账号安全、数据丢失、功能
+  受限等风险。
+- 插件默认拥有当前用户完整权限，安装第三方插件前请确认来源与代码内容。
 
-[^1]: 尽管这里的连接指向 [LagrangeDev](https://github.com/LagrangeDev)
-，本仓库的依赖项中该包裹指向 [作者自己的 fork](https://github.com/HarcicYang/lagrange-python)。这是因为作者为了本项目，在
-fork 中照葫芦画瓢做了一些自己的实现。因此，如果您安装了 LagrangeDev 提供的包裹，该项目可能无法正常运行。
+[^1]: 本仓库依赖中的 lagrange-python 包指向
+[作者自己的 fork](https://github.com/HarcicYang/lagrange-python)，其中包含本项目
+所需而上游尚未提供的实现；直接替换为 LagrangeDev 原版包可能无法正常运行。
 
-[^2]: 部分环境下，安装有关依赖库可能需要额外配置 openssl 和 rust 开发环境。
+[^2]: 部分环境下，安装相关依赖库可能需要额外配置 openssl 与 rust 开发环境。
