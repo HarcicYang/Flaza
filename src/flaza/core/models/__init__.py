@@ -28,6 +28,7 @@ from flaza.core.models.message import (
     TextElement,
     UnknownElement,
     VideoElement,
+    quote_preview_text,
 )
 from flaza.core.models.session import Session
 
@@ -63,4 +64,5 @@ __all__ = [
     "TextElement",
     "UnknownElement",
     "VideoElement",
+    "quote_preview_text",
 ]

@@ -245,6 +245,28 @@ def test_quote_uses_background_depth_instead_of_border() -> None:
     assert title_text.startswith("10001 · 1970-01-01")
 
 
+def test_quote_body_is_single_line_and_limited() -> None:
+    root = build_message_content(
+        _message(
+            QuoteElement(
+                seq=1,
+                uin=10001,
+                timestamp=1,
+                msg="第一行\n" + "很长" * 40 + "\n最后一行",
+            )
+        ).model_copy(update={"from_self": False})
+    )
+
+    quote = _quote_blocks(root)[0]
+    body_span = quote.container[1]
+    assert isinstance(body_span, Span)
+    body = body_span.container[0]
+    assert isinstance(body, str)
+    assert "\n" not in body
+    assert len(body) <= 81
+    assert body.endswith("…")
+
+
 def test_image_click_callback_receives_preview() -> None:
     previews: list[ImagePreview] = []
 

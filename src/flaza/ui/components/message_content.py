@@ -31,6 +31,7 @@ from flaza.core.models import (
     TextElement,
     UnknownElement,
     VideoElement,
+    quote_preview_text,
 )
 from flaza.ui.components.image_viewer import ImagePreview
 
@@ -427,11 +428,12 @@ def _quote(element: QuoteElement, from_self: bool) -> Div:
     sender = element.sender_name or str(element.uin) if element.uin else "未知发送者"
     timestamp = _format_quote_timestamp(element.timestamp)
     title = f"{sender} · {timestamp}" if timestamp else sender
+    body = quote_preview_text(element.msg or "原消息不可见")
     return Div(
         styles=styles,
         container=[
             Span(container=[title], styles=_QUOTE_TITLE),
-            Span(container=[element.msg or "原消息不可见"], styles=_QUOTE_BODY),
+            Span(container=[body], styles=_QUOTE_BODY),
         ],
     )
 

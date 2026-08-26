@@ -55,6 +55,22 @@ def test_chat_target_group_and_text_property() -> None:
     assert message.text == "第一段第二段"
 
 
+def test_message_reply_text_is_single_line_and_limited() -> None:
+    text = "第一行\n" + "很长" * 40 + "\n最后一行"
+    message = Message(
+        chat=FriendChat(uid="u_1", uin=10001),
+        sender_uin=10001,
+        sender_uid="u_1",
+        seq=1,
+        timestamp=1,
+        elements=[TextElement(text=text)],
+    )
+
+    expected = " ".join(text.split())[:80] + "…"
+    assert "\n" not in message.reply_text
+    assert message.reply_text == expected
+
+
 @pytest.mark.parametrize(
     ("payload", "element_type", "preview_text"),
     [

@@ -122,13 +122,7 @@ def _convert_elements(msg_chain: list[Any], uid_to_nickname: dict[str, str] | No
         if isinstance(element, lagrange_elems.Text):
             elements.append(TextElement(text=element.text))
         elif isinstance(element, lagrange_elems.At):
-            if (
-                elements
-                and isinstance(elements[-1], QuoteElement)
-                and elements[-1].uid
-                and element.uid
-                and elements[-1].uid == element.uid
-            ):
+            if elements and isinstance(elements[-1], QuoteElement):
                 continue
             elements.append(AtElement(text=element.text, uin=element.uin, uid=element.uid))
         elif isinstance(element, lagrange_elems.AtAll):

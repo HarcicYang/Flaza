@@ -207,7 +207,7 @@ class QuoteElement(BaseModel):
     def preview_text(self) -> str:
         if not self.msg:
             return "[回复]"
-        excerpt = self.msg if len(self.msg) <= 30 else f"{self.msg[:30]}…"
+        excerpt = quote_preview_text(self.msg, limit=30)
         return f"[回复] {excerpt}"
 
 
@@ -298,6 +298,11 @@ class Message(BaseModel):
         """消息预览文本，由元素派生。"""
         return "".join(element.preview_text for element in self.elements)
 
+    @property
+    def reply_text(self) -> str:
+        """回复引用使用的单行预览文本。"""
+        return quote_preview_text(self.text, limit=80)
+
 
 class StoredMessage(BaseModel):
     """带本地自增 id 的消息，供分页和已读游标使用。"""
@@ -306,3 +311,11 @@ class StoredMessage(BaseModel):
 
     id: int
     message: Message
+
+
+def quote_preview_text(text: str, *, limit: int = 80) -> str:
+    """把引用文本折叠成单行并截断到有限长度。"""
+    line = " ".join(text.split())
+    if len(line) <= limit:
+        return line
+    return f"{line[:limit]}…"

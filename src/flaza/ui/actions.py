@@ -27,6 +27,7 @@ from flaza.core.models import (
     QuoteElement,
     StoredMessage,
     TextElement,
+    quote_preview_text,
 )
 from flaza.ui.state import UiStateStore
 
@@ -178,7 +179,7 @@ class UiActions:
             uin=quoted.sender_uin,
             timestamp=quoted.timestamp,
             uid=quoted.sender_uid,
-            msg=quoted.text[:200],
+            msg=quote_preview_text(quoted.text, limit=200),
             sender_name=quoted.sender_name or str(quoted.sender_uin),
         )
 

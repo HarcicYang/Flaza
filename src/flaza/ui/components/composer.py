@@ -19,7 +19,7 @@ from neony.application.theme import stub
 from neony.dom import Button as _ButtonElem
 from neony.dom import Color, Div, DOMElement, DomEvent, Span, Styles
 
-from flaza.core.models import GroupMember, StoredMessage
+from flaza.core.models import GroupMember, StoredMessage, quote_preview_text
 from flaza.ui.actions import UiActions
 from flaza.ui.components.member_picker import MemberPicker
 
@@ -182,9 +182,7 @@ class Composer:
             self.root.container.insert(0, self._reply_bar_el)
 
         message = self._reply_to.message
-        quote_text = message.text or "原消息不可见"
-        if len(quote_text) > 60:
-            quote_text = quote_text[:60] + "…"
+        quote_text = quote_preview_text(message.text or "原消息不可见", limit=60)
         sender = message.sender_name or str(message.sender_uin)
         label = f"回复 {sender}：{quote_text}"
 
