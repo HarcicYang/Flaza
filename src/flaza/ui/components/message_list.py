@@ -316,24 +316,7 @@ class MessageList:
             ):
                 entry.message = message
                 if entry.bubble is not None:
-                    self_info = self._state.self_info()
-                    self_uid = self_info.uid if self_info else None
-                    on_reaction_click = self._make_reaction_pill_handler(stored, self_uid)
-                    new_content = build_message_content(
-                        message,
-                        self._on_image_click,
-                        self._on_file_download,
-                        on_reaction_click=on_reaction_click,
-                        self_uid=self_uid,
-                        plugin_registry=self._plugin_registry,
-                    )
-                    # Reactions-only refresh: same in-place swap hazard as
-                    # _replace_child — re-link parent pointers by hand.
-                    old_content = entry.bubble._bubble.container[0] if entry.bubble._bubble.container else None
-                    if isinstance(old_content, DOMElement):
-                        old_content._parent = None
-                    new_content._parent = entry.bubble._bubble
-                    object.__setattr__(entry.bubble._bubble, "container", [new_content])
+                    self._rebuild_message_content(stored)
                 continue
             # 撤回、身份变化、头像变化：原地替换该元素。
             old_bubble = entry.bubble
@@ -390,10 +373,17 @@ class MessageList:
         # Fallback: container was empty or old content not found — full
         # swap with manual parent relinking.
         stale = bubble._bubble.container[0] if bubble._bubble.container else None
-        if isinstance(stale, DOMElement):
-            stale._parent = None
-        new_content._parent = bubble._bubble
-        object.__setattr__(bubble._bubble, "container", [new_content])
+        container = bubble._bubble.container
+        if hasattr(container, "_owner"):
+            if container:
+                container.clear()
+            container.append(new_content)
+        else:
+            if isinstance(stale, DOMElement):
+                stale._parent = None
+            new_content._parent = bubble._bubble
+            object.__setattr__(bubble._bubble, "container", [new_content])
+        bubble._bubble.mark_dirty()
 
     def _index_of(self, element: DOMElement) -> int | None:
         for index, child in enumerate(self.root.container):
@@ -483,6 +473,25 @@ class MessageList:
                 "right": "calc(100% + 6px)" if message.from_self else None,
             }
         )
+        # 固定按钮热区，让可点击区域与 14px 图标中心重合，避免原生 UA
+        # 按钮盒（默认字体/行高/内边距）把可点击位置偏移到图标之外。
+        for action_button in bubble._actions.container:
+            if isinstance(action_button, DOMElement):
+                action_button.styles = action_button.styles.model_copy(
+                    update={
+                        "width": "28px",
+                        "height": "28px",
+                        "padding": "0",
+                        "appearance": "none",
+                        "line_height": "1",
+                    }
+                )
+                # 图标/标签只是按钮内部的装饰内容；若让它们接收指针事件，
+                # Neony 事件桥看到的目标 key 是图标而非按钮，点击按钮内容
+                # 就不会触发 action。让内容穿透到按钮自身才能整盒可点。
+                for button_child in action_button.container:
+                    if isinstance(button_child, DOMElement):
+                        button_child.styles = button_child.styles.model_copy(update={"pointer_events": "none"})
         reaction_picker = ReactionPicker(on_select=self._make_reaction_selected_handler(stored))
         bubble._col.container.append(reaction_picker.root)
         if self._on_message_action is not None:
@@ -633,6 +642,7 @@ def _replace_child(parent: DOMElement, old: DOMElement, new: DOMElement) -> bool
             parent.container[index] = new
             old._parent = None
             new._parent = parent
+            parent.mark_dirty()
             return True
     return False
 

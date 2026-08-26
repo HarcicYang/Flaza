@@ -15,6 +15,7 @@ from neony.dom.reactive import effect
 from flaza.config import AppConfig
 from flaza.core.events import (
     EventBus,
+    GroupReactionChanged,
 )
 from flaza.core.models import ChatTarget, FileElement, GroupChat, GroupMemberRole, StoredMessage
 from flaza.plugins.registry import PluginExtensionRegistry
@@ -264,6 +265,31 @@ class HomePage:
             qq = self._actions._runtime._qq
             if qq is not None and isinstance(chat, GroupChat):
                 await qq.send_reaction(chat, stored.message.seq, emoji, emoji_type=emoji_type, is_cancel=is_cancel)
+                self_info = self._state.self_info()
+                if self_info is not None and self_info.uid:
+                    current = next(
+                        (
+                            reaction
+                            for reaction in stored.message.reactions
+                            if reaction.emoji_id == emoji and reaction.emoji_type == emoji_type
+                        ),
+                        None,
+                    )
+                    if is_cancel:
+                        count = max(0, current.count - 1) if current is not None else 0
+                    else:
+                        count = (current.count + 1) if current is not None else 1
+                    await self._state.update_group_reaction(
+                        GroupReactionChanged(
+                            group_id=chat.group_id,
+                            seq=stored.message.seq,
+                            emoji_id=emoji,
+                            emoji_type=emoji_type,
+                            count=count,
+                            is_increase=not is_cancel,
+                            operator_uid=self_info.uid,
+                        )
+                    )
         except Exception as exc:
             logger.exception("发送表情回应失败")
             await self._show_error(f"表情回应失败：{exc}")

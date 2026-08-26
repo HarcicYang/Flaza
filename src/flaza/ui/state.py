@@ -256,6 +256,9 @@ class UiStateStore:
         self.group_roles.set(roles)
 
     async def _on_group_reaction_changed(self, event: GroupReactionChanged) -> None:
+        await self.update_group_reaction(event)
+
+    async def update_group_reaction(self, event: GroupReactionChanged) -> None:
         """持久化群表情事件，并在当前会话可见时更新投影。"""
         chat = GroupChat(group_id=event.group_id)
         persisted = await self._storage.messages.apply_group_reaction(

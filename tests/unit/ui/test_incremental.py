@@ -9,6 +9,7 @@ from flaza.core.models import (
     FriendChat,
     GroupChat,
     Message,
+    MessageReaction,
     PluginElement,
     Session,
     StoredMessage,
@@ -173,6 +174,58 @@ def test_message_list_keeps_bubble_when_only_media_cache_changes() -> None:
     assert len(videos) == 1
     assert videos[0].src == "https://example.com/v.mp4"
     assert videos[0].args.get("data-neony-direct-events")
+
+
+def test_message_action_buttons_have_centered_hit_targets() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    chat = GroupChat(group_id=10001)
+    messages.set_messages(chat, (_group_message(1, "你好", 1),))
+
+    bubble = messages._items["message:1"].bubble
+    assert bubble is not None
+    buttons = [child for child in bubble._actions.container if isinstance(child, DOMElement)]
+    assert len(buttons) == 2
+    for button in buttons:
+        assert button.styles.width == "28px"
+        assert button.styles.height == "28px"
+        assert button.styles.padding == "0"
+        assert button.styles.justify_content == "center"
+        assert button.styles.align_items == "center"
+        icon = button.container[0]
+        assert isinstance(icon, DOMElement)
+        assert icon.styles.pointer_events == "none"
+        assert icon._serialize_styles()["pointer-events"] == "none"
+
+
+def test_message_list_marks_bubble_dirty_when_reactions_change() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    chat = GroupChat(group_id=10001)
+    base = _group_message(1, "你好", 1)
+    messages.set_messages(chat, (base,))
+    bubble = messages._items["message:1"].bubble
+    assert bubble is not None
+    old_content = bubble._bubble.container[0]
+
+    reacted = base.model_copy(
+        update={
+            "message": base.message.model_copy(
+                update={"reactions": [MessageReaction(emoji_id="😊", count=2, users=["u_2", "u_3"])]}
+            )
+        }
+    )
+    bubble._bubble._dirty = False
+    bubble._bubble._dirty_type = 0
+    messages.set_messages(chat, (reacted,))
+
+    assert bubble._bubble._dirty_type & DOMElement._DIRTY_STRUCTURAL
+    assert bubble._bubble._dirty
+    content = bubble._bubble.container[0]
+    assert content is not old_content
+    text = _element_text(content)
+    assert "😊" in text
+    assert "2" in text
 
 
 def test_message_list_prepends_older_messages_without_rebuilding() -> None:
