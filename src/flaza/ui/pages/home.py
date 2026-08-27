@@ -119,7 +119,7 @@ class HomePage:
         actions.set_chat_view_refresher(self._refresh_async)
 
         self.session_list = SessionList(state, actions, self._on_session_selected)
-        self.image_viewer = ImageViewer(render, eval_js=actions._runtime.eval_js)
+        self.image_viewer = ImageViewer(render)
         self.message_list = MessageList(
             state,
             on_image_click=self.image_viewer.open,
@@ -182,7 +182,12 @@ class HomePage:
         sessions = list(self._state.sessions())
         self.session_list.set_sessions(sessions)
         active = self._state.active_chat()
-        self.message_list.set_messages(active, self._state.messages(), self._state.notices())
+        self.message_list.set_messages(
+            active,
+            self._state.messages(),
+            self._state.notices(),
+            self._state.pending_messages(),
+        )
 
     def _on_state_signal_changed(self) -> None:
         # 建立 Effect 依赖；真实变化会进入下面的合并调度。
@@ -190,6 +195,7 @@ class HomePage:
             self._state.sessions(),
             self._state.active_chat(),
             self._state.messages(),
+            self._state.pending_messages(),
             self._state.notices(),
             self._state.group_roles(),
             self._state.self_info(),
@@ -271,10 +277,15 @@ class HomePage:
         """发送/取消指定消息的表情回应。"""
         try:
             chat = stored.message.chat
-            qq = self._actions._runtime._qq
-            if qq is not None and isinstance(chat, GroupChat):
-                await qq.send_reaction(chat, stored.message.seq, emoji, emoji_type=emoji_type, is_cancel=is_cancel)
+            if isinstance(chat, GroupChat):
                 self_info = self._state.self_info()
+                await self._actions.send_reaction(
+                    chat,
+                    stored.message.seq,
+                    emoji,
+                    emoji_type=emoji_type,
+                    is_cancel=is_cancel,
+                )
                 if self_info is not None and self_info.uid:
                     current = next(
                         (
@@ -388,7 +399,7 @@ class HomePage:
         self.composer.switch_chat(chat.key)
         if isinstance(chat, GroupChat):
             try:
-                members = await self._actions._runtime.storage.members.list_by_group(chat.group_id)
+                members = await self._actions.list_group_members(chat.group_id)
                 self_info = self._state.self_info()
                 # 判断当前用户是否是群主或管理员
                 can_mention_all = False

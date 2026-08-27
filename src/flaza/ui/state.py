@@ -6,7 +6,8 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,7 @@ from flaza.core.models import (
     GroupMemberRole,
     LoginPhase,
     Message,
+    MessageElement,
     SelfInfo,
     Session,
     StoredMessage,
@@ -114,6 +116,7 @@ class UiStateStore:
         self.active_chat = Signal[ChatTarget | None](None)
         self.active_chat_title = Signal("")
         self.messages = Signal[tuple[StoredMessage, ...]](())
+        self.pending_messages = Signal[tuple[StoredMessage, ...]](())
         self.notices = Signal[tuple[ChatNotice, ...]](())
         self.group_roles = Signal[dict[str, GroupMemberRole]]({})
         self.has_older_messages = Signal(False)
@@ -127,6 +130,7 @@ class UiStateStore:
         self._chat_cache_refresh_dirty: dict[str, bool] = {}
         self._chat_prebuilder: Callable[[ChatTarget, tuple[StoredMessage, ...]], None] | None = None
         self._warm_sessions_task: asyncio.Task[None] | None = None
+        self._next_pending_id = -1
 
     def set_render(self, render: RenderCallback | None) -> None:
         """注入 Neony 渲染回调，由应用组装根调用。"""
@@ -277,6 +281,34 @@ class UiStateStore:
             raise
         finally:
             self._chat_cache_refresh_tasks.pop(key, None)
+
+    def begin_outgoing_message(self, chat: ChatTarget, elements: Sequence[MessageElement]) -> StoredMessage:
+        """把尚未确认的消息加入聊天流的乐观投影。
+
+        负数本地 ID 只存在于 UI 状态中；真实消息入库后使用正数 ID，
+        因此不会与会话缓存或存储层冲突。
+        """
+        info = self.self_info()
+        message = Message(
+            chat=chat,
+            sender_uin=info.uin if info else 0,
+            sender_uid=info.uid if info else "",
+            sender_name=info.nickname if info else "我",
+            seq=0,
+            timestamp=int(time.time()),
+            elements=list(elements),
+            from_self=True,
+        )
+        stored = StoredMessage(id=self._next_pending_id, message=message)
+        self._next_pending_id -= 1
+        self.pending_messages.set((*self.pending_messages(), stored))
+        return stored
+
+    def remove_pending_message(self, stored: StoredMessage) -> None:
+        """按乐观 ID 移除待确认消息；重复移除是安全的。"""
+        pending = tuple(item for item in self.pending_messages() if item.id != stored.id)
+        if pending != self.pending_messages():
+            self.pending_messages.set(pending)
 
     async def _load_chat_messages_snapshot(self, chat: ChatTarget) -> ChatMessagesSnapshot:
         messages, has_older = await self._storage.messages.list_recent_with_has_before(

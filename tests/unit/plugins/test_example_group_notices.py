@@ -5,7 +5,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from flaza.core.events import (
     EventBus,
@@ -17,8 +17,10 @@ from flaza.core.events import (
 )
 from flaza.core.models import Group, GroupMember, GroupMemberRole
 from flaza.plugins import PluginContext
+from flaza.plugins.host import PluginHost
 from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.plugins.state import PluginState
+from flaza.runtime import ApplicationRuntime
 
 _EXAMPLE_PLUGIN = Path(__file__).resolve().parents[3] / "examples" / "plugins" / "group-notices"
 
@@ -32,7 +34,13 @@ def test_group_notices_example_replaces_builtin_gray_notices(tmp_path: Path) -> 
         registry = PluginExtensionRegistry()
         host = SimpleNamespace(registry=registry)
         bus = EventBus()
-        context = PluginContext("group-notices", runtime, bus, PluginState(), host)
+        context = PluginContext(
+            "group-notices",
+            cast(ApplicationRuntime, runtime),
+            bus,
+            PluginState(),
+            cast(PluginHost, host),
+        )
 
         plugin = _load_plugin()
         await plugin.on_load(context)
@@ -88,11 +96,7 @@ def test_group_notices_example_replaces_builtin_gray_notices(tmp_path: Path) -> 
         )
         await _wait_for_notice(state, "管理员 被禁言 60 秒")
 
-        state.groups.set(
-            (
-                Group(group_id=20001, name="旧群名"),
-            )
-        )
+        state.groups.set((Group(group_id=20001, name="旧群名"),))
         bus.publish(GroupNameChanged(group_id=20001, name_new="新群名", timestamp=13))
         await _wait_for_notice(state, "群名已修改为“新群名”")
         assert contacts.group_names[20001] == "新群名"

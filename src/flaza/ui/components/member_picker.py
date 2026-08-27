@@ -205,14 +205,14 @@ class MemberPicker:
                 "max_width": "260px",
             }
         )
-        self._root.args = {**self._root.args, "data-neony-outside": "true"}
+        self._root.set_outside_click(True)
         self._open = True
         self.filter(query)
 
     def show_above(self, query: str = "") -> None:
         """在父容器上方显示（position: absolute 相对定位）。"""
         self._root.styles = _PANEL_ABOVE_OPEN
-        self._root.args = {**self._root.args, "data-neony-outside": "true"}
+        self._root.set_outside_click(True)
         self._open = True
         self.filter(query)
 
@@ -222,7 +222,7 @@ class MemberPicker:
             return
         self._open = False
         self._root.styles = self._root.styles.model_copy(update={"display": "none"})
-        self._root.args = {k: v for k, v in self._root.args.items() if k != "data-neony-outside"}
+        self._root.set_outside_click(False)
 
     def filter(self, query: str, *, preserve_active: bool = True) -> None:
         """按查询文本过滤成员列表并刷新 DOM。"""

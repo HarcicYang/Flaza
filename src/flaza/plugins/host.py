@@ -10,11 +10,11 @@ import logging
 import re
 import shutil
 import sys
-from collections.abc import Awaitable
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 from flaza.plugins.api import FlazaPlugin
 from flaza.plugins.context import PluginContext
@@ -133,9 +133,9 @@ class PluginHost:
         self._state.set_enabled(plugin_id, enabled)
         await self.reload()
 
-    def spawn_task(self, awaitable: Awaitable[Any]) -> asyncio.Task[Any]:
+    def spawn_task(self, coroutine: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         """托管一个后台任务；插件停止时统一取消。"""
-        task = asyncio.create_task(awaitable)
+        task = asyncio.create_task(coroutine)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
@@ -240,6 +240,7 @@ def _import_entry_module(module_name: str, entry_path: Path) -> ModuleType:
 class _DiskSourceLoader(importlib.machinery.SourceFileLoader):
     """始终重新编译插件源码，绕开可能过期的 .pyc 缓存。"""
 
+    @override
     def get_code(self, fullname: str) -> Any:
         source = self.get_data(self.path)
         return compile(source, self.path, "exec", dont_inherit=True)

@@ -17,7 +17,7 @@ dependencies = [
     "httpx>=0.28.1",
     "lagrange-python @ git+https://github.com/HarcicYang/lagrange-python.git",
     "msgpack>=1.1",
-    "neony>=0.2.4.post1",
+    "neony>=0.3.1",
     "packaging>=24.2",
     "imageio-ffmpeg>=0.5.0",
 ]
@@ -48,3 +48,7 @@ dev = [
     "pyrefly>=1.2.0",
     "nuitka>=4.1.3",
 ]
+
+[tool.uv.sources]
+# Flaza 当前依赖未发布的 Neony 公开 API；本地联动开发时始终使用工作区源码。
+neony = { path = "../Neony", editable = true }

@@ -8,9 +8,18 @@ from dataclasses import dataclass
 from typing import Literal
 
 from neony.application import icons
-from neony.application.elements import Avatar, Badge, Button, Icon, MessageBubble, NoticeBubble, StickToBottom
+from neony.application.elements import (
+    Avatar,
+    Badge,
+    Button,
+    Icon,
+    MessageBubble,
+    NoticeBubble,
+    Progress,
+    StickToBottom,
+)
 from neony.application.theme import stub
-from neony.dom import Border, Computed, DOMElement, DomEvent, Signal, Span, Styles, Transition
+from neony.dom import Border, Computed, Div, DOMElement, DomEvent, Signal, Span, Styles, Transition
 
 from flaza.core.models import (
     ChatTarget,
@@ -59,6 +68,16 @@ _JUMP_BUTTON = Styles(
     transition=Transition(duration="0.15s", timing="ease"),
     cursor="pointer",
 )
+
+_PENDING_CONTENT = Styles(
+    display="flex",
+    flex_direction="column",
+    align_items="flex-end",
+    gap="6px",
+    max_width="100%",
+)
+
+_SENDING_PROGRESS = Styles(width="68px", height="4px")
 
 
 @dataclass
@@ -143,19 +162,20 @@ class MessageList:
         chat: ChatTarget | None,
         messages: tuple[StoredMessage, ...],
         notices: tuple[ChatNotice, ...] = (),
+        pending_messages: tuple[StoredMessage, ...] = (),
     ) -> None:
         chat_key = chat.key if chat is not None else None
         if chat_key != self._chat_key:
-            self._reset_all(chat, messages, notices)
+            self._reset_all(chat, messages, notices, pending_messages)
             return
 
         if chat is None:
             self._ensure_placeholder("选择一个会话开始聊天")
             return
 
-        timeline = self._build_timeline(chat, messages, notices)
+        timeline = self._build_timeline(chat, messages, notices, pending_messages)
         if not timeline:
-            self._reset_all(chat, messages, notices)
+            self._reset_all(chat, messages, notices, pending_messages)
             return
 
         desired_keys = [self._item_key(item) for item in timeline]
@@ -192,13 +212,23 @@ class MessageList:
             self._update_existing(timeline, chat)
             return
 
-        self._reset_all(chat, messages, notices)
+        # 乐观发送确认后：只移除尾部 pending 气泡，真实消息随下一次刷新追加。
+        if len(desired_keys) < len(old_keys) and old_keys[: len(desired_keys)] == desired_keys:
+            while len(self._ordered_keys) > len(desired_keys):
+                key = self._ordered_keys.pop()
+                self._items.pop(key, None)
+                self.root.container.pop()
+            self._update_existing(timeline, chat)
+            return
+
+        self._reset_all(chat, messages, notices, pending_messages)
 
     def _reset_all(
         self,
         chat: ChatTarget | None,
         messages: tuple[StoredMessage, ...],
         notices: tuple[ChatNotice, ...],
+        pending_messages: tuple[StoredMessage, ...] = (),
     ) -> None:
         self.root.container.clear()
         self._items.clear()
@@ -210,7 +240,7 @@ class MessageList:
             self._ensure_placeholder("选择一个会话开始聊天")
             return
 
-        timeline = self._build_timeline(chat, messages, notices)
+        timeline = self._build_timeline(chat, messages, notices, pending_messages)
         if not timeline:
             self._ensure_placeholder("还没有消息，发一句打个招呼吧")
             return
@@ -354,8 +384,8 @@ class MessageList:
             # 撤回、身份变化、头像变化：原地替换该元素。
             old_bubble = entry.bubble
             element, kind, new_message, role, avatar_src, bubble = self._build_item(stored, chat)
-            if old_bubble is not None and bubble is not None and old_bubble._actions_shown:  # type: ignore[attr-defined]
-                bubble._set_actions_visible(True)  # type: ignore[attr-defined]
+            if old_bubble is not None and bubble is not None and old_bubble.actions_visible:
+                bubble.show_actions()
             self._replace_element(key, element)
             self._items[key] = _RenderedItem(
                 key=key,
@@ -390,9 +420,6 @@ class MessageList:
 
         self_info = self._state.self_info()
         self_uid = self_info.uid if self_info else None
-        old_content: DOMElement | None = None
-        if bubble._bubble.container and isinstance(bubble._bubble.container[0], DOMElement):
-            old_content = bubble._bubble.container[0]
         new_content = build_message_content(
             entry.message,
             self._on_image_click,
@@ -401,22 +428,7 @@ class MessageList:
             self_uid=self_uid,
             plugin_registry=self._plugin_registry,
         )
-        if old_content is not None and _replace_child(bubble._bubble, old_content, new_content):
-            return
-        # Fallback: container was empty or old content not found — full
-        # swap with manual parent relinking.
-        stale = bubble._bubble.container[0] if bubble._bubble.container else None
-        container = bubble._bubble.container
-        if hasattr(container, "_owner"):
-            if container:
-                container.clear()
-            container.append(new_content)
-        else:
-            if isinstance(stale, DOMElement):
-                stale._parent = None
-            new_content._parent = bubble._bubble
-            object.__setattr__(bubble._bubble, "container", [new_content])
-        bubble._bubble.mark_dirty()
+        bubble.set_content(new_content)
 
     def _index_of(self, element: DOMElement) -> int | None:
         for index, child in enumerate(self.root.container):
@@ -468,10 +480,11 @@ class MessageList:
             )
 
         role = self._resolve_role(chat, message)
+        is_pending = item.id < 0
         menu_items: list[tuple[str, str]] = []
-        if message.text:
+        if not is_pending and message.text:
             menu_items.append(("copy", "复制文本"))
-        if any(isinstance(item, FileElement) for item in message.elements):
+        if not is_pending and any(isinstance(item, FileElement) for item in message.elements):
             menu_items.append(("download", "下载文件"))
         if message.from_self:
             menu_items.append(("recall", "撤回"))
@@ -480,62 +493,44 @@ class MessageList:
         self_info = self._state.self_info()
         self_uid = self_info.uid if self_info else None
         stored = item
-        actions: list[Icon | tuple[str, str]] = [icons.chat, icons.favorite]
+        actions: list[Icon | tuple[str, str]] = [] if is_pending else [icons.chat, icons.favorite]
         if self._plugin_registry is not None:
             actions.extend([(entry.key, entry.label) for entry in self._plugin_registry.message_actions()])
+        name_badge: Badge | None = None
+        if isinstance(chat, GroupChat) and not message.from_self and role is not GroupMemberRole.MEMBER:
+            label, variant = _ROLE_BADGE.get(role, ("", "neutral"))
+            if label:
+                name_badge = Badge(label, variant=variant)
+        content = build_message_content(
+            message,
+            self._on_image_click,
+            self._on_file_download,
+            on_reaction_click=self._make_reaction_pill_handler(stored, self_uid),
+            self_uid=self_uid,
+            plugin_registry=self._plugin_registry,
+        )
+        if is_pending:
+            sending = Progress(indeterminate=True).reset_styles(_SENDING_PROGRESS)
+            content = Div(styles=_PENDING_CONTENT, container=[content, sending.build()])
         bubble = MessageBubble(
             text=message.text,
-            content=build_message_content(
-                message,
-                self._on_image_click,
-                self._on_file_download,
-                on_reaction_click=self._make_reaction_pill_handler(stored, self_uid),
-                self_uid=self_uid,
-                plugin_registry=self._plugin_registry,
-            ),
+            content=content,
             from_me=message.from_self,
             name=message.sender_name if isinstance(chat, GroupChat) and not message.from_self else None,
             avatar=avatar,
-            menu_items=menu_items,
+            menu_items=[] if is_pending else menu_items,
             actions=actions,
+            actions_placement="beside",
+            action_size="28px",
+            name_badge=name_badge,
+            white_space="pre-wrap",
         )
-        # 动作行悬浮到气泡侧面的空白槽（他人的消息在右、自己的在左），
-        # 垂直居中且始终落在本行高度内，避免悬停时遮挡下方消息。
-        bubble._actions.styles = bubble._actions.styles.model_copy(
-            update={
-                "top": "50%",
-                "transform": "translateY(-50%)",
-                "left": None if message.from_self else "calc(100% + 6px)",
-                "right": "calc(100% + 6px)" if message.from_self else None,
-            }
-        )
-        # 固定按钮热区，让可点击区域与 14px 图标中心重合，避免原生 UA
-        # 按钮盒（默认字体/行高/内边距）把可点击位置偏移到图标之外。
-        for action_button in bubble._actions.container:
-            if isinstance(action_button, DOMElement):
-                action_button.styles = action_button.styles.model_copy(
-                    update={
-                        "width": "28px",
-                        "height": "28px",
-                        "padding": "0",
-                        "appearance": "none",
-                        "line_height": "1",
-                    }
-                )
-                # 图标/标签只是按钮内部的装饰内容；若让它们接收指针事件，
-                # Neony 事件桥看到的目标 key 是图标而非按钮，点击按钮内容
-                # 就不会触发 action。让内容穿透到按钮自身才能整盒可点。
-                for button_child in action_button.container:
-                    if isinstance(button_child, DOMElement):
-                        button_child.styles = button_child.styles.model_copy(update={"pointer_events": "none"})
-        reaction_picker = ReactionPicker(on_select=self._make_reaction_selected_handler(stored))
-        bubble._col.container.append(reaction_picker.root)
-        if self._on_message_action is not None:
-            bubble.on_change(self._make_message_action_handler(stored))
-            bubble.on_action(self._make_action_handler(stored, reaction_picker))
-        bubble._bubble.styles = bubble._bubble.styles.model_copy(update={"white_space": "pre-wrap"})
-        if isinstance(chat, GroupChat) and not message.from_self and role is not GroupMemberRole.MEMBER:
-            _MessageListHelpers._append_role_badge(bubble, role)
+        if not is_pending:
+            reaction_picker = ReactionPicker(on_select=self._make_reaction_selected_handler(stored))
+            bubble.overlay_slot.container.append(reaction_picker.root)
+            if self._on_message_action is not None:
+                bubble.on_change(self._make_message_action_handler(stored))
+                bubble.on_action(self._make_action_handler(stored, reaction_picker))
         element = bubble.build()
         element.key = f"message:{item.id}"
         return element, "message", message, role, avatar_src, bubble
@@ -595,9 +590,7 @@ class MessageList:
         if top is None:
             await self.scroll_to_bottom(force=True)
             return
-        coro = self._stick._call_js(f'window.neony.scrollTo({self._stick._key()}, {top}, "auto")')
-        if coro is not None:
-            await coro
+        await self._stick.scroll_to(top)
 
     def _make_scroll_handler(self, callback: Callable[[], Awaitable[None]]):
         async def handler(event: DomEvent) -> None:
@@ -656,10 +649,12 @@ class MessageList:
         chat: ChatTarget,
         messages: tuple[StoredMessage, ...],
         notices: tuple[ChatNotice, ...],
+        pending_messages: tuple[StoredMessage, ...] = (),
     ) -> list[StoredMessage | ChatNotice]:
         chat_key = chat.key
         entries: list[tuple[int, int, int, StoredMessage | ChatNotice]] = []
-        for index, stored in enumerate(messages):
+        visible_messages = (*messages, *(item for item in pending_messages if item.message.chat.key == chat_key))
+        for index, stored in enumerate(visible_messages):
             entries.append((stored.message.timestamp, 0, index, stored))
         for index, notice in enumerate(notices):
             if notice.chat_key == chat_key:
@@ -679,37 +674,3 @@ def _strip_media_cache(message: Message) -> Message:
         for element in message.elements
     )
     return message.model_copy(update={"elements": elements})
-
-
-def _replace_child(parent: DOMElement, old: DOMElement, new: DOMElement) -> bool:
-    """Replace *old* with *new* inside ``parent.container``.
-
-    In-place container surgery bypasses the ``_Children`` aware list, so
-    the new subtree's ``_parent`` pointer must be re-linked by hand (and
-    the stale link on *old* cleared); without this, commands that walk
-    ``_parent`` to find the tree root — eval-js transport, clipboard,
-    render requests — silently fail for the replaced content.
-    """
-    for index, child in enumerate(parent.container):
-        if child is old:
-            parent.container[index] = new
-            old._parent = None
-            new._parent = parent
-            parent.mark_dirty()
-            return True
-    return False
-
-
-class _MessageListHelpers:
-    @staticmethod
-    def _append_role_badge(bubble: MessageBubble, role: GroupMemberRole) -> None:
-        label, variant = _ROLE_BADGE.get(role, ("", "neutral"))
-        if not label:
-            return
-        badge = Badge(label, variant=variant)
-        name_span = bubble._name_span
-        name_span.styles = name_span.styles.model_copy(update={"gap": "4px"})
-        name_span.container = [
-            badge.build(),
-            Span(container=[bubble._name or ""]),
-        ]

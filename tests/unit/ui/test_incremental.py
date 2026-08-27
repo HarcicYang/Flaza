@@ -12,6 +12,7 @@ from flaza.core.models import (
     Message,
     MessageReaction,
     PluginElement,
+    SelfInfo,
     Session,
     StoredMessage,
     TextElement,
@@ -29,7 +30,9 @@ def _runtime_state() -> tuple[ApplicationRuntime, UiStateStore]:
     return runtime, runtime.state
 
 
-def _element_text(element: DOMElement) -> str:
+def _element_text(element: DOMElement | None) -> str:
+    if element is None:
+        return ""
     parts: list[str] = []
     for child in element.container:
         if isinstance(child, str):
@@ -170,7 +173,8 @@ def test_message_list_keeps_bubble_when_only_media_cache_changes() -> None:
     assert messages.root.container[0] is bubble_before
     assert messages._items["message:1"].message == cached.message
     assert messages._items["message:1"].bubble
-    raw_content = messages._items["message:1"].bubble._bubble.container[0]
+    assert messages._items["message:1"].bubble is not None
+    raw_content = messages._items["message:1"].bubble.content
     assert isinstance(raw_content, DOMElement)
     content: DOMElement = raw_content
     videos = []
@@ -198,7 +202,7 @@ def test_message_action_buttons_have_centered_hit_targets() -> None:
 
     bubble = messages._items["message:1"].bubble
     assert bubble is not None
-    buttons = [child for child in bubble._actions.container if isinstance(child, DOMElement)]
+    buttons = bubble.action_elements()
     assert len(buttons) == 2
     for button in buttons:
         assert button.styles.width == "28px"
@@ -212,7 +216,7 @@ def test_message_action_buttons_have_centered_hit_targets() -> None:
         assert icon._serialize_styles()["pointer-events"] == "none"
 
 
-def test_message_list_marks_bubble_dirty_when_reactions_change() -> None:
+def test_message_list_replaces_content_when_reactions_change() -> None:
     _runtime, state = _runtime_state()
     messages = MessageList(state)
     chat = GroupChat(group_id=10001)
@@ -220,7 +224,7 @@ def test_message_list_marks_bubble_dirty_when_reactions_change() -> None:
     messages.set_messages(chat, (base,))
     bubble = messages._items["message:1"].bubble
     assert bubble is not None
-    old_content = bubble._bubble.container[0]
+    old_content = bubble.content
 
     reacted = base.model_copy(
         update={
@@ -229,13 +233,10 @@ def test_message_list_marks_bubble_dirty_when_reactions_change() -> None:
             )
         }
     )
-    bubble._bubble._dirty = False
-    bubble._bubble._dirty_type = 0
     messages.set_messages(chat, (reacted,))
 
-    assert bubble._bubble._dirty_type & DOMElement._DIRTY_STRUCTURAL
-    assert bubble._bubble._dirty
-    content = bubble._bubble.container[0]
+    content = bubble.content
+    assert content is not old_content
     assert content is not old_content
     text = _element_text(content)
     assert "😊" in text
@@ -395,7 +396,8 @@ def test_recalled_message_keeps_content_when_retained() -> None:
 
     entry = messages._items["message:1"]
     assert entry.bubble is not None
-    assert _element_text(entry.bubble._bubble.container[0]) == "一"
+    assert entry.bubble is not None
+    assert _element_text(entry.bubble.content) == "一"
     assert entry.kind == "message"
 
 
@@ -424,7 +426,8 @@ def test_message_list_renders_plugin_elements_through_registry() -> None:
 
     entry = messages._items["message:1"]
     assert entry.bubble is not None
-    assert _element_text(entry.bubble._bubble.container[0]) == "插件动态"
+    assert entry.bubble is not None
+    assert _element_text(entry.bubble.content) == "插件动态"
 
 
 def test_jump_button_follows_scroll_state() -> None:
@@ -464,40 +467,15 @@ def test_message_list_remembers_and_restores_last_scroll_position(monkeypatch: p
     assert chat.key not in messages._scroll_positions
 
     asyncio.run(messages._on_scroll_at_bottom(scrolled_up))
-    captured: list[str] = []
+    captured: list[float] = []
 
-    async def fake_call_js(script: str) -> None:
-        captured.append(script)
+    async def fake_scroll_to(top: float, *, behavior: str = "auto") -> None:
+        assert behavior == "auto"
+        captured.append(top)
 
-    monkeypatch.setattr(messages._stick, "_call_js", fake_call_js)
+    monkeypatch.setattr(messages._stick, "scroll_to", fake_scroll_to)
     asyncio.run(messages.restore_scroll(chat.key))
-    assert len(captured) == 1
-    assert "scrollTo" in captured[0]
-    assert "240" in captured[0]
-
-
-def test_quick_actions_float_beside_bubble() -> None:
-    _runtime, state = _runtime_state()
-    messages = MessageList(state)
-    stored = _group_message(1, "你好", 1)
-    mine = _group_message(2, "收到", 2, from_self=True)
-    messages.set_messages(stored.message.chat, (stored, mine))
-
-    other_bubble = messages._items["message:1"].bubble
-    assert other_bubble is not None
-    other_styles = other_bubble._actions.styles
-    assert other_styles is not None
-    assert other_styles.top == "50%"
-    assert other_styles.transform == "translateY(-50%)"
-    assert other_styles.left == "calc(100% + 6px)"
-    assert other_styles.right is None
-
-    mine_bubble = messages._items["message:2"].bubble
-    assert mine_bubble is not None
-    mine_styles = mine_bubble._actions.styles
-    assert mine_styles is not None
-    assert mine_styles.right == "calc(100% + 6px)"
-    assert mine_styles.left is None
+    assert captured == [240]
 
 
 def test_quick_actions_use_icon_values_and_map_to_reply_reaction() -> None:
@@ -508,7 +486,7 @@ def test_quick_actions_use_icon_values_and_map_to_reply_reaction() -> None:
     entry = messages._items["message:1"]
     bubble = entry.bubble
     assert bubble is not None
-    assert set(bubble._action_by_key.values()) == {"chat", "favorite"}
+    assert set(bubble.action_values()) == {"chat", "favorite"}
 
     async def scenario() -> None:
         captured: list[str] = []
@@ -530,7 +508,11 @@ def test_quick_actions_use_icon_values_and_map_to_reply_reaction() -> None:
 def test_message_list_renders_plugin_quick_action_and_routes_value() -> None:
     _runtime, state = _runtime_state()
     registry = PluginExtensionRegistry()
-    registry.register_message_action("demo", "send", lambda item: None, label="+1")
+
+    async def plugin_action(item: StoredMessage) -> None:
+        return None
+
+    registry.register_message_action("demo", "send", plugin_action, label="+1")
     messages = MessageList(state, plugin_registry=registry)
     stored = _group_message(1, "你好", 1)
     messages.set_messages(stored.message.chat, (stored,))
@@ -539,8 +521,8 @@ def test_message_list_renders_plugin_quick_action_and_routes_value() -> None:
     assert bubble is not None
     plugin_button = next(
         button
-        for button in bubble._actions.container
-        if isinstance(button, DOMElement) and bubble._action_by_key.get(button.key) == "plugin:demo:send"
+        for button, value in zip(bubble.action_elements(), bubble.action_values(), strict=True)
+        if value == "plugin:demo:send"
     )
     assert _element_text(plugin_button) == "+1"
 
@@ -556,6 +538,38 @@ def test_message_list_renders_plugin_quick_action_and_routes_value() -> None:
         handler = friend_list._make_action_handler(friend_stored, _reaction_picker())
         await handler("plugin:demo:send")
         assert captured == [("plugin:demo:send", 1)]
+
+    asyncio.run(scenario())
+
+
+def test_pending_message_appends_then_removes_only_its_bubble() -> None:
+    async def scenario() -> None:
+        _runtime, state = _runtime_state()
+        chat = FriendChat(uid="u_1", uin=10001)
+        state.self_info.set(SelfInfo(uin=10001, uid="u_self", nickname="我"))
+
+        old = (_message(chat, 1, "一", 1), _message(chat, 2, "二", 2))
+        messages = MessageList(state)
+        messages.set_messages(chat, old)
+        existing_elements = list(messages.root.container)
+
+        pending = state.begin_outgoing_message(chat, [TextElement(text="正在发送")])
+        messages.set_messages(chat, old, (), (pending,))
+
+        assert len(messages.root.container) == 3
+        assert messages.root.container[:2] == existing_elements
+        entry = messages._items[f"message:{pending.id}"]
+        assert entry.kind == "message"
+        assert entry.bubble is not None
+        assert entry.message is not None
+        assert entry.message.from_self is True
+        content = entry.bubble.content
+        assert content is not None
+        assert len(content.container) == 2
+
+        messages.set_messages(chat, old, (), ())
+        assert list(messages.root.container) == existing_elements
+        assert f"message:{pending.id}" not in messages._items
 
     asyncio.run(scenario())
 

@@ -8,7 +8,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
@@ -182,7 +182,9 @@ class _HandlerEntry:
     priority: int
     order: int
     mode: str
-    handler: Callable[[FlazaEvent], Awaitable[object]]
+    # Handlers are registered against concrete event subclasses, while the queue
+    # exposes the common base during dispatch.
+    handler: Callable[..., Awaitable[Any]]
     token: object
 
 
@@ -243,7 +245,7 @@ class EventBus:
     def _register(
         self,
         event_type: type[_E],
-        handler: object,
+        handler: Callable[[_E], Awaitable[Any]],
         mode: str,
         priority: int,
     ) -> Subscription:
@@ -259,13 +261,11 @@ class EventBus:
         """
         while True:
             event = await self._queue.get()
-            entries = sorted(
-                self._handlers[type(event)],
-                key=lambda entry: (-entry.priority, entry.order),
-            )
+            entries = sorted(self._handlers[type(event)], key=_handler_sort_key)
             for entry in entries:
+                result = None
                 try:
-                    result = await entry.handler(event)  # type: ignore[misc]
+                    result = await entry.handler(event)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -283,3 +283,8 @@ class EventBus:
             return
         with contextlib.suppress(ValueError):
             handlers[:] = [entry for entry in handlers if entry.token is not token]
+
+
+def _handler_sort_key(entry: _HandlerEntry) -> tuple[int, int]:
+    """Stable dispatch order: higher priority first, then registration order."""
+    return -entry.priority, entry.order

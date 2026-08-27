@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
 
 from neony.application.elements import Button
 from neony.application.theme import stub
@@ -101,22 +99,19 @@ class ImagePreview:
 class ImageViewer:
     """全屏图片预览：滚轮缩放、按钮缩放、双击切换、Esc / 空白关闭。"""
 
-    def __init__(
-        self, render: Callable[[], Awaitable[None]], eval_js: Callable[[str], Coroutine[Any, Any, str]] | None = None
-    ) -> None:
+    def __init__(self, render: Callable[[], Awaitable[None]]) -> None:
         self._render = render
-        self._eval_js = eval_js
         self._scale = 1.0
         self._fit = True
         self._preview: ImagePreview | None = None
         self._offset_x = 0.0
         self._offset_y = 0.0
         self._dragging = False
-        self._last_x: float | None = None
-        self._last_y: float | None = None
+        self._anchor_x: float | None = None
+        self._anchor_y: float | None = None
+        self._anchor_offset_x = 0.0
+        self._anchor_offset_y = 0.0
         self._is_open = False
-        self._drag_transform: str | None = None
-        self._drag_sync_task: asyncio.Task[None] | None = None
 
         self._image = Img(alt="", args={"draggable": "false"})
         self._stage = Div(styles=_STAGE, container=[self._image])
@@ -151,8 +146,7 @@ class ImageViewer:
         self.root.on_mouseup(self._on_mouseup)
         self.root.bubble_events = True
 
-        # 拖拽事件由 on_mousedown/on_pointermove/on_mouseup 处理
-        # CSS transform 通过 eval_js 直接更新以绕过 Neony 渲染管线
+        # 拖拽事件由 on_mousedown/on_pointermove/on_mouseup 处理。
 
     @property
     def is_open(self) -> bool:
@@ -168,12 +162,16 @@ class ImageViewer:
         self._offset_x = 0.0
         self._offset_y = 0.0
         self._stage.styles = _STAGE
+        self._update_stage_cursor()
         self._sync_image_styles()
         self.root.styles = _OVERLAY
         await self._render()
 
     async def close(self) -> None:
         self._is_open = False
+        self._dragging = False
+        self._anchor_x = None
+        self._anchor_y = None
         self.root.styles = _OVERLAY.model_copy(update={"display": "none"})
         await self._render()
 
@@ -205,63 +203,46 @@ class ImageViewer:
     async def _on_mousedown(self, event: DomEvent) -> None:
         if event.x is None or event.y is None:
             return
-        if self._fit and abs(self._scale - 1.0) < 0.01:
+        if not self._can_pan():
             return
         self._dragging = True
-        self._last_x = event.x
-        self._last_y = event.y
-        self._stage.styles = self._stage.styles.model_copy(update={"cursor": "grabbing"})
+        self._anchor_x = event.x
+        self._anchor_y = event.y
+        self._anchor_offset_x = self._offset_x
+        self._anchor_offset_y = self._offset_y
+        self._sync_image_styles()
+        self._update_stage_cursor("grabbing")
         await self._render()
 
     async def _on_pointermove(self, event: DomEvent) -> None:
         if not self._dragging:
             return
-        if event.movement_x is None and event.movement_y is None and (event.x is None or event.y is None):
+        if event.x is None or event.y is None or self._anchor_x is None or self._anchor_y is None:
             return
 
-        dx = event.movement_x or 0.0
-        dy = event.movement_y or 0.0
-        if dx == 0 and dy == 0 and event.x is not None and event.y is not None:
-            if self._last_x is not None:
-                dx = event.x - self._last_x
-            if self._last_y is not None:
-                dy = event.y - self._last_y
-        self._offset_x += dx
-        self._offset_y += dy
-        if event.x is not None:
-            self._last_x = event.x
-        if event.y is not None:
-            self._last_y = event.y
+        # 每帧都由按下时的绝对锚点重算，增量事件缺失、重复或乱序时也不会漂移。
+        self._offset_x = self._anchor_offset_x + event.x - self._anchor_x
+        self._offset_y = self._anchor_offset_y + event.y - self._anchor_y
         self._sync_image_styles()
-        if self._eval_js is not None:
-            self._drag_transform = f"translate({self._offset_x}px, {self._offset_y}px) scale({self._scale})"
-            if self._drag_sync_task is None or self._drag_sync_task.done():
-                self._drag_sync_task = asyncio.create_task(self._flush_drag_transform())
-        else:
-            await self._render()
-
-    async def _flush_drag_transform(self) -> None:
-        """顺序应用拖拽过程中的最新 transform，避免异步 JS 调用乱序回弹。"""
-        while self._drag_transform is not None:
-            transform = self._drag_transform
-            self._drag_transform = None
-            if self._eval_js is None:
-                return
-            key = self._image.key
-            await self._eval_js(
-                f"const el = document.querySelector('[data-neony-key=\"{key}\"]');"
-                f"if (el) el.style.transform = '{transform}'"
-            )
+        await self._render()
 
     async def _on_mouseup(self, _event: DomEvent) -> None:
+        was_dragging = self._dragging
         self._dragging = False
-        self._last_x = None
-        self._last_y = None
-        if self._drag_sync_task is not None:
-            await self._drag_sync_task
-        if self.root.styles.display != "none":
-            self._stage.styles = self._stage.styles.model_copy(update={"cursor": "grab"})
+        self._anchor_x = None
+        self._anchor_y = None
+        if was_dragging:
+            self._sync_image_styles()
+            self._update_stage_cursor()
         await self._render()
+
+    def _can_pan(self) -> bool:
+        return not (self._fit and abs(self._scale - 1.0) < 0.01)
+
+    def _update_stage_cursor(self, cursor: str | None = None) -> None:
+        if cursor is None:
+            cursor = "default" if not self._can_pan() else "grab"
+        self._stage.styles = self._stage.styles.model_copy(update={"cursor": cursor})
 
     async def _on_double_click(self, _event: DomEvent) -> None:
         if self._fit:
@@ -276,6 +257,7 @@ class ImageViewer:
         self._offset_x = 0.0
         self._offset_y = 0.0
         self._stage.styles = _STAGE
+        self._update_stage_cursor()
         self._sync_image_styles()
         await self._render()
 
@@ -309,4 +291,5 @@ class ImageViewer:
                 }
             )
         transform = f"translate({self._offset_x}px, {self._offset_y}px) scale({self._scale})"
-        self._image.styles = styles.model_copy(update={"transform": transform})
+        transition = "none" if self._dragging else styles.transition
+        self._image.styles = styles.model_copy(update={"transform": transform, "transition": transition})

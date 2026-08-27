@@ -3,13 +3,14 @@
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 from flaza.config import AppConfig, PathsConfig
 from flaza.plugins import PluginHost
 from flaza.runtime import ApplicationRuntime
 
 
-def _make_config(tmp_path, plugins_dir) -> AppConfig:
+def _make_config(tmp_path: Path, plugins_dir: Path) -> AppConfig:
     return AppConfig(
         paths=PathsConfig(
             plugins_dir=str(plugins_dir),
@@ -18,7 +19,7 @@ def _make_config(tmp_path, plugins_dir) -> AppConfig:
     )
 
 
-def _write_plugin(plugins_dir, plugin_id: str, code: str) -> None:
+def _write_plugin(plugins_dir: Path, plugin_id: str, code: str) -> None:
     plugin_dir = plugins_dir / plugin_id
     plugin_dir.mkdir(parents=True)
     (plugin_dir / "manifest.json").write_text(
@@ -28,7 +29,7 @@ def _write_plugin(plugins_dir, plugin_id: str, code: str) -> None:
     (plugin_dir / "main.py").write_text(code, encoding="utf-8")
 
 
-def test_host_loads_plugin_and_custom_event(tmp_path) -> None:
+def test_host_loads_plugin_and_custom_event(tmp_path: Path) -> None:
     plugins_dir = tmp_path / "plugins"
     _write_plugin(
         plugins_dir,
@@ -87,7 +88,7 @@ plugin = Demo()
     asyncio.run(scenario())
 
 
-def test_host_skips_broken_plugin_and_keeps_others(tmp_path) -> None:
+def test_host_skips_broken_plugin_and_keeps_others(tmp_path: Path) -> None:
     plugins_dir = tmp_path / "plugins"
     _write_plugin(
         plugins_dir,
@@ -119,7 +120,7 @@ plugin = Good()
     asyncio.run(scenario())
 
 
-def test_host_reload_reads_plugin_files_from_disk_each_time(tmp_path) -> None:
+def test_host_reload_reads_plugin_files_from_disk_each_time(tmp_path: Path) -> None:
     plugins_dir = tmp_path / "plugins"
     _write_plugin(
         plugins_dir,

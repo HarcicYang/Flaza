@@ -7,7 +7,7 @@
 | `recall-keep/`   | 收到撤回事件时保留本地消息内容，并标记为已撤回。 |
 | `group-notices/` | 群成员进出、管理员、禁言与群名变更的详细播报。   |
 | `plus-one/`      | 在消息气泡快捷动作中增加 +1 按钮，原样复读消息。 |
-| `custom-theme/`  | 加载时覆盖 CSS 颜色变量，卸载时恢复内置主题。    |
+| `custom-theme/`  | 通过公开 API 切换到 Flaza 内置主题。             |
 
 ## 使用
 
@@ -21,4 +21,4 @@ cp -r examples/plugins/plus-one examples/plugins/custom-theme plugins/
 `settings` 调整示例插件行为。
 
 `plus-one` 依赖消息气泡快捷动作扩展点，`custom-theme` 依赖
-`ctx.runtime.eval_js`，其余示例仅使用插件公开 API。
+`ctx.apply_theme`，其余示例仅使用插件公开 API。

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Sequence
+from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from flaza.core.events import (
@@ -167,7 +167,11 @@ class PluginContext:
         self._registrations.add(registration)
         return registration
 
-    # ---- 消息与联系人 ----
+    # ---- 消息、联系人与 UI ----
+
+    async def apply_theme(self, theme_name: str) -> None:
+        """切换 Flaza 内置主题；名称非法或未挂载窗口时由运行时报错。"""
+        await self.runtime.set_theme(theme_name)
 
     async def send_message(self, target: ChatTarget, elements: Sequence[MessageElement]) -> Message:
         """通过消息服务发送任意元素组合；QQ 未启动时抛出 RuntimeError。"""
@@ -213,9 +217,9 @@ class PluginContext:
 
     # ---- 任务与 UI ----
 
-    def spawn_task(self, awaitable: Awaitable[Any]) -> asyncio.Task[Any]:
+    def spawn_task(self, coroutine: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         """托管一个后台任务，插件卸载时宿主会自动取消。"""
-        return self._host.spawn_task(awaitable)
+        return self._host.spawn_task(coroutine)
 
     async def notify(self, chat_key: str, text: str, *, timestamp: int | None = None, key: str | None = None) -> None:
         """向指定聊天流追加一条灰条通知。"""

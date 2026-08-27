@@ -46,3 +46,4 @@ chat_cache.json
 media_cache/
 
 .account-backup/
+/plugin_state.json

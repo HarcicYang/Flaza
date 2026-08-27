@@ -299,17 +299,23 @@ class Composer:
             return
 
         self._send_button.disabled = True
+        draft_segments = segments
+        draft_image_paths = dict(self._image_paths)
+        reply_to = self._reply_to
         try:
-            # 如果有回复引用，发送到 actions 时附带 QuoteElement
-            reply_to = self._reply_to
-            self.set_reply_to(None)  # 先清除，避免重复
+            # 乐观发送：输入内容先离开编辑器，等待协议确认期间由气泡展示。
+            self._image_paths.clear()
+            self._editor.set_content([])
+            self.set_reply_to(None)
             if reply_to is not None:
                 await self._actions.send_reply_message(reply_to, blocks)
             else:
                 await self._actions.send_composed_blocks(blocks)
-            self._image_paths.clear()
-            self._editor.set_content([])
         except Exception as exc:
+            self._image_paths.update(draft_image_paths)
+            self._editor.set_content(draft_segments)
+            if reply_to is not None:
+                self.set_reply_to(reply_to)
             await self._show_error(f"发送失败：{exc}")
         finally:
             self._send_button.disabled = False

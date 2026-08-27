@@ -2,13 +2,14 @@
 
 import asyncio
 import json
+from pathlib import Path
 
 from flaza.config import AppConfig, PathsConfig
 from flaza.runtime import ApplicationRuntime
 from flaza.ui.pages.plugin_manager import PluginManagerPage
 
 
-def _write_plugin(plugins_dir, plugin_id: str) -> None:
+def _write_plugin(plugins_dir: Path, plugin_id: str) -> None:
     plugin_dir = plugins_dir / plugin_id
     plugin_dir.mkdir(parents=True)
     (plugin_dir / "manifest.json").write_text(
@@ -37,7 +38,7 @@ plugin = Demo()
     )
 
 
-def test_plugin_manager_page_lists_plugins_and_directory(tmp_path) -> None:
+def test_plugin_manager_page_lists_plugins_and_directory(tmp_path: Path) -> None:
     plugins_dir = tmp_path / "plugins"
     _write_plugin(plugins_dir, "demo")
     config = AppConfig(
@@ -66,7 +67,7 @@ def test_plugin_manager_page_lists_plugins_and_directory(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-def test_plugin_manager_page_shows_empty_state(tmp_path) -> None:
+def test_plugin_manager_page_shows_empty_state(tmp_path: Path) -> None:
     plugins_dir = tmp_path / "plugins"
     plugins_dir.mkdir()
     config = AppConfig(

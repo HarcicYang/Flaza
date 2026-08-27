@@ -2,8 +2,10 @@
 
 import asyncio
 import base64
+from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
 from neony.application.elements import ImageSegment, TextSegment
 from neony.dom import DomEvent
 
@@ -58,6 +60,30 @@ def test_neony_pasted_data_url_is_indexed_without_replacing_editor_content(tmp_p
             DomEvent(key="editor", type="change", value=[ImageSegment(src=src, alt="pasted.png")])
         )
         assert composer._image_paths[src].endswith(".png")
+        assert composer._editor.content() == []
+
+    asyncio.run(scenario())
+
+
+def test_composer_clears_input_before_send_action_awaits(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        runtime = ApplicationRuntime(AppConfig())
+        calls: list[list[tuple[str, str]]] = []
+
+        async def render() -> None:
+            return None
+
+        async def send(blocks: Sequence[tuple[str, str]]) -> None:
+            calls.append(list(blocks))
+            assert composer._editor.content() == []
+
+        composer = Composer(runtime.actions, render)
+        composer._editor.set_content(["你好"])
+        composer._editor.set_caret(2)
+        monkeypatch.setattr(runtime.actions, "send_composed_blocks", send)
+
+        await composer._send()
+        assert calls == [[("text", "你好")]]
         assert composer._editor.content() == []
 
     asyncio.run(scenario())

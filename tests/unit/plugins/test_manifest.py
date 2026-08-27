@@ -2,6 +2,9 @@
 
 import importlib.metadata
 import json
+from pathlib import Path
+
+import pytest
 
 from flaza.plugins.manifest import (
     PluginDiscovery,
@@ -10,7 +13,7 @@ from flaza.plugins.manifest import (
 )
 
 
-def test_discovery_loads_valid_manifest(tmp_path) -> None:
+def test_discovery_loads_valid_manifest(tmp_path: Path) -> None:
     plugin_dir = tmp_path / "plugins" / "hello"
     plugin_dir.mkdir(parents=True)
     (plugin_dir / "manifest.json").write_text(
@@ -33,7 +36,7 @@ def test_discovery_loads_valid_manifest(tmp_path) -> None:
     assert candidates[0].manifest.dependencies == ["httpx>=0.28"]
 
 
-def test_discovery_skips_invalid_and_duplicate_manifests(tmp_path) -> None:
+def test_discovery_skips_invalid_and_duplicate_manifests(tmp_path: Path) -> None:
     root = tmp_path / "plugins"
     bad = root / "bad"
     bad.mkdir(parents=True)
@@ -49,7 +52,7 @@ def test_discovery_skips_invalid_and_duplicate_manifests(tmp_path) -> None:
     assert candidates[0].manifest.id == "same"
 
 
-def test_dependency_check_reports_missing_and_mismatch(monkeypatch) -> None:
+def test_dependency_check_reports_missing_and_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_version(name: str) -> str:
         if name == "httpx":
             return "0.27.0"

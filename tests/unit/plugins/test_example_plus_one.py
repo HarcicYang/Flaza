@@ -5,12 +5,15 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 from flaza.core.events import EventBus
 from flaza.core.models import ChatTarget, GroupChat, Message, MessageElement, StoredMessage, TextElement
 from flaza.plugins import PluginContext
+from flaza.plugins.host import PluginHost
 from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.plugins.state import PluginState
+from flaza.runtime import ApplicationRuntime
 
 _EXAMPLE_PLUGIN = Path(__file__).resolve().parents[3] / "examples" / "plugins" / "plus-one"
 
@@ -36,9 +39,9 @@ def test_plus_one_example_sends_exact_elements() -> None:
                     from_self=True,
                 )
 
-        runtime = SimpleNamespace(message_service=FakeMessageService())
+        runtime = cast(ApplicationRuntime, SimpleNamespace(message_service=FakeMessageService()))
         registry = PluginExtensionRegistry()
-        host = SimpleNamespace(registry=registry)
+        host = cast(PluginHost, SimpleNamespace(registry=registry))
         context = PluginContext("plus-one", runtime, EventBus(), PluginState(), host)
 
         plugin = _load_plugin()

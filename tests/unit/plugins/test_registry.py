@@ -1,8 +1,17 @@
 """插件扩展注册表测试。"""
 
 import asyncio
+from collections.abc import Sequence
 
-from flaza.core.models import FriendChat, Message, PluginElement, StoredMessage, TextElement
+from flaza.core.models import (
+    ChatTarget,
+    FriendChat,
+    Message,
+    MessageElement,
+    PluginElement,
+    StoredMessage,
+    TextElement,
+)
 from flaza.plugins.registry import PluginExtensionRegistry
 
 
@@ -29,11 +38,17 @@ def test_message_filters_rewrite_then_abort() -> None:
         registry = PluginExtensionRegistry()
         calls: list[str] = []
 
-        async def rewrite(target, elements):
+        async def rewrite(
+            target: ChatTarget,
+            elements: Sequence[MessageElement],
+        ) -> tuple[ChatTarget, Sequence[MessageElement]]:
             calls.append("rewrite")
             return target, [TextElement(text="改写")]
 
-        async def abort(target, elements):
+        async def abort(
+            target: ChatTarget,
+            elements: Sequence[MessageElement],
+        ) -> tuple[ChatTarget, Sequence[MessageElement]] | None:
             calls.append("abort")
             return None
 
@@ -51,7 +66,10 @@ def test_message_filters_can_rewrite_target_and_elements() -> None:
         registry = PluginExtensionRegistry()
         original = _chat()
 
-        async def redirect(target, elements):
+        async def redirect(
+            target: ChatTarget,
+            elements: Sequence[MessageElement],
+        ) -> tuple[ChatTarget, Sequence[MessageElement]]:
             return target, [TextElement(text="被插件改写")]
 
         registry.register_outgoing_message_filter("demo", redirect)
@@ -59,7 +77,11 @@ def test_message_filters_can_rewrite_target_and_elements() -> None:
         assert result is not None
         target, elements = result
         assert target == original
-        assert [element.text for element in elements] == ["被插件改写"]
+        texts: list[str] = []
+        for element in elements:
+            assert isinstance(element, TextElement)
+            texts.append(element.text)
+        assert texts == ["被插件改写"]
 
     asyncio.run(scenario())
 
@@ -68,7 +90,7 @@ def test_filter_exception_is_isolated_and_dispose_removes_handler() -> None:
     async def scenario() -> None:
         registry = PluginExtensionRegistry()
 
-        async def broken(target, elements):
+        async def broken(target: ChatTarget, elements: Sequence[MessageElement]) -> None:
             raise RuntimeError("boom")
 
         registration = registry.register_outgoing_message_filter("demo", broken)
@@ -88,10 +110,10 @@ def test_file_filter_and_recall_hook() -> None:
         registry = PluginExtensionRegistry()
         chat = _chat()
 
-        async def lock_file(target, path, filename):
+        async def lock_file(target: ChatTarget, path: str, filename: str | None) -> None:
             return None
 
-        async def fake_confirm(target, seq):
+        async def fake_confirm(target: ChatTarget, seq: int) -> bool:
             return False
 
         registry.register_outgoing_file_filter("demo", lock_file)
@@ -149,17 +171,31 @@ def test_remove_plugin_cleans_all_registrations() -> None:
         registry = PluginExtensionRegistry()
         chat = _chat()
 
-        async def keep(target, elements):
+        async def keep(
+            target: ChatTarget,
+            elements: Sequence[MessageElement],
+        ) -> tuple[ChatTarget, Sequence[MessageElement]]:
             return target, elements
 
-        async def block_recall(target, seq):
+        async def keep_file(
+            target: ChatTarget,
+            path: str,
+            filename: str | None,
+        ) -> tuple[ChatTarget, str, str | None]:
+            return target, path, filename
+
+        async def block_recall(target: ChatTarget, seq: int) -> bool:
             return False
 
         registry.register_outgoing_message_filter("demo", keep)
-        registry.register_outgoing_file_filter("demo", keep)
+        registry.register_outgoing_file_filter("demo", keep_file)
         registry.register_before_recall_hook("demo", block_recall)
         registry.register_element("demo", "card", renderer=lambda item: "card")
-        registry.register_message_action("demo", "send", lambda item: None, label="+1")
+
+        async def plugin_action(item: StoredMessage) -> None:
+            return None
+
+        registry.register_message_action("demo", "send", plugin_action, label="+1")
 
         registry.remove_plugin("demo")
 

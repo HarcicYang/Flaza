@@ -30,6 +30,7 @@ from flaza.core.models import (
     quote_preview_text,
 )
 from flaza.plugins.host import PluginSnapshot
+from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.ui.state import CHAT_MESSAGE_PAGE_SIZE, UiStateStore
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,29 @@ class UiActions:
         应传 False 以保持当前阅读位置。
         """
         self._chat_view_refresher = refresher
+
+    @property
+    def plugin_registry(self) -> PluginExtensionRegistry:
+        return self._runtime.plugin_registry
+
+    async def send_reaction(
+        self,
+        chat: ChatTarget,
+        seq: int,
+        emoji_id: str,
+        emoji_type: int = 2,
+        *,
+        is_cancel: bool = False,
+    ) -> None:
+        """通过协议客户端发送或取消群消息表情回应。"""
+        qq = self._runtime.qq
+        if qq is None:
+            raise RuntimeError("QQ 尚未启动，无法发送表情回应")
+        await qq.send_reaction(chat, seq, emoji_id, emoji_type=emoji_type, is_cancel=is_cancel)
+
+    async def list_group_members(self, group_id: int) -> list[GroupMember]:
+        """读取本地群成员缓存，供 @ 提及等 UI 使用。"""
+        return await self._runtime.storage.members.list_by_group(group_id)
 
     # ---- 登录 ----
 
@@ -130,7 +154,7 @@ class UiActions:
 
         if not elements:
             return
-        await self._message_service().send_message(chat, elements)
+        await self._send_with_pending_bubble(chat, elements)
         await self._refresh_after_send_safely(chat, state)
 
     async def send_composed_blocks(self, blocks: Sequence[tuple[str, str]]) -> None:
@@ -143,31 +167,10 @@ class UiActions:
         if chat is None:
             return
 
-        elements: list[MessageElement] = []
-        for kind, value in blocks:
-            if kind == "text":
-                text = value.strip()
-                if text:
-                    elements.append(TextElement(text=text))
-            elif kind == "image":
-                if _looks_like_image(value):
-                    elements.append(ImageElement(local_path=value))
-            elif kind == "at":
-                if value == "__all__":
-                    elements.append(AtAllElement(text="@全体成员"))
-                elif ":" in value:
-                    parts = value.split(":", 2)
-                    uid = parts[0]
-                    try:
-                        uin = int(parts[1])
-                    except (ValueError, IndexError):
-                        uin = 0
-                    display_name = parts[2] if len(parts) > 2 else str(uin)
-                    elements.append(AtElement(uid=uid, uin=uin, text=f"@{display_name}"))
-
+        elements = self._elements_from_blocks(blocks)
         if not elements:
             return
-        await self._message_service().send_message(chat, elements)
+        await self._send_with_pending_bubble(chat, elements)
         await self._refresh_after_send_safely(chat, state)
 
     async def send_reply_message(self, reply_to: StoredMessage, blocks: Sequence[tuple[str, str]]) -> None:
@@ -187,31 +190,10 @@ class UiActions:
             sender_name=quoted.sender_name or str(quoted.sender_uin),
         )
 
-        elements: list[MessageElement] = [quote]
-        for kind, value in blocks:
-            if kind == "text":
-                text = value.strip()
-                if text:
-                    elements.append(TextElement(text=text))
-            elif kind == "image":
-                if _looks_like_image(value):
-                    elements.append(ImageElement(local_path=value))
-            elif kind == "at":
-                if value == "__all__":
-                    elements.append(AtAllElement(text="@全体成员"))
-                elif ":" in value:
-                    parts = value.split(":", 2)
-                    uid = parts[0]
-                    try:
-                        uin = int(parts[1])
-                    except (ValueError, IndexError):
-                        uin = 0
-                    display_name = parts[2] if len(parts) > 2 else str(uin)
-                    elements.append(AtElement(uid=uid, uin=uin, text=f"@{display_name}"))
-
+        elements = [quote, *self._elements_from_blocks(blocks)]
         if not elements:
             return
-        await self._message_service().send_message(chat, elements)
+        await self._send_with_pending_bubble(chat, elements)
         await self._refresh_after_send_safely(chat, state)
 
     async def pick_images(self) -> list[str]:
@@ -240,11 +222,10 @@ class UiActions:
             return
 
         sent = 0
-        service = self._message_service()
         for path in paths:
             if not _looks_like_image(path):
                 continue
-            await service.send_image(chat, path)
+            await self._send_with_pending_bubble(chat, [ImageElement(local_path=path)])
             sent += 1
 
         if sent:
@@ -270,9 +251,8 @@ class UiActions:
             return
 
         sent = 0
-        service = self._message_service()
         for path in paths:
-            await service.send_file(chat, path)
+            await self._send_with_pending_file(chat, path)
             sent += 1
 
         if sent:
@@ -282,6 +262,46 @@ class UiActions:
     def is_image_path(path: str) -> bool:
         """判断路径是否属于受支持的图片文件。"""
         return _looks_like_image(path)
+
+    async def _send_with_pending_bubble(self, chat: ChatTarget, elements: list[MessageElement]) -> None:
+        """先显示乐观气泡，再等待协议确认；失败时立即移除。"""
+        state = self._runtime.state
+        pending = state.begin_outgoing_message(chat, elements)
+        try:
+            await self._message_service().send_message(chat, elements)
+        except Exception:
+            state.remove_pending_message(pending)
+            raise
+        state.remove_pending_message(pending)
+
+    async def _send_with_pending_file(self, chat: ChatTarget, path: str) -> None:
+        """乐观发送本地文件，文件名用于未完成阶段的可读展示。"""
+        element = FileElement(file_name=Path(path).name)
+        await self._send_with_pending_bubble(chat, [element])
+
+    @staticmethod
+    def _elements_from_blocks(blocks: Sequence[tuple[str, str]]) -> list[MessageElement]:
+        """把 Composer 的块协议转换成领域消息元素。"""
+        elements: list[MessageElement] = []
+        for kind, value in blocks:
+            if kind == "text":
+                text = value.strip()
+                if text:
+                    elements.append(TextElement(text=text))
+            elif kind == "image" and _looks_like_image(value):
+                elements.append(ImageElement(local_path=value))
+            elif kind == "at" and value == "__all__":
+                elements.append(AtAllElement(text="@全体成员"))
+            elif kind == "at" and ":" in value:
+                parts = value.split(":", 2)
+                uid = parts[0]
+                try:
+                    uin = int(parts[1])
+                except (ValueError, IndexError):
+                    uin = 0
+                display_name = parts[2] if len(parts) > 2 else str(uin)
+                elements.append(AtElement(uid=uid, uin=uin, text=f"@{display_name}"))
+        return elements
 
     async def load_older_messages(self) -> None:
         """加载当前会话更早的一页消息。

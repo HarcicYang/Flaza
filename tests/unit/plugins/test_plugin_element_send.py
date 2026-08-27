@@ -2,7 +2,7 @@
 
 import asyncio
 
-from flaza.core.models import FriendChat, PluginElement, TextElement
+from flaza.core.models import ChatTarget, FriendChat, PluginElement, TextElement
 from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.qq.clients import LagrangeQQClient
 
@@ -11,7 +11,7 @@ def test_prepare_outgoing_element_uses_registered_sender() -> None:
     async def scenario() -> None:
         registry = PluginExtensionRegistry()
 
-        async def sender(target, element):
+        async def sender(target: ChatTarget, element: PluginElement) -> tuple[str, TextElement]:
             return "protocol-card", TextElement(text="持久化预览")
 
         registry.register_element("demo", "card", sender=sender)

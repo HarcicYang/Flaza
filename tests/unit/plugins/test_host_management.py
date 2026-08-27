@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +11,7 @@ from flaza.config import AppConfig, PathsConfig
 from flaza.runtime import ApplicationRuntime
 
 
-def _make_config(tmp_path, plugins_dir: str) -> AppConfig:
+def _make_config(tmp_path: Path, plugins_dir: str) -> AppConfig:
     return AppConfig(
         paths=PathsConfig(
             plugins_dir=plugins_dir,
@@ -19,7 +20,7 @@ def _make_config(tmp_path, plugins_dir: str) -> AppConfig:
     )
 
 
-def _write_plugin(plugins_dir, plugin_id: str) -> None:
+def _write_plugin(plugins_dir: Path, plugin_id: str) -> None:
     plugin_dir = plugins_dir / plugin_id
     plugin_dir.mkdir(parents=True, exist_ok=True)
     (plugin_dir / "manifest.json").write_text(
@@ -41,7 +42,7 @@ plugin = Demo()
     )
 
 
-def test_host_set_plugin_enabled_unloads_and_reloads(tmp_path) -> None:
+def test_host_set_plugin_enabled_unloads_and_reloads(tmp_path: Path) -> None:
     plugins_dir = tmp_path / "plugins"
     _write_plugin(plugins_dir, "demo")
     runtime = ApplicationRuntime(_make_config(tmp_path, str(plugins_dir)))
@@ -69,7 +70,10 @@ def test_host_set_plugin_enabled_unloads_and_reloads(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-def test_save_plugins_dir_switches_directory_without_restart(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_save_plugins_dir_switches_directory_without_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     plugins_a = tmp_path / "plugins_a"
     plugins_b = tmp_path / "plugins_b"
     _write_plugin(plugins_a, "alpha")

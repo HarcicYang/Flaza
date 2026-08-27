@@ -1,9 +1,11 @@
 """插件 JSON 状态持久化测试。"""
 
+from pathlib import Path
+
 from flaza.plugins.state import PluginState
 
 
-def test_plugin_state_roundtrip(tmp_path) -> None:
+def test_plugin_state_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "plugin_state.json"
     state = PluginState(path)
     assert state.is_enabled("demo") is True
@@ -24,7 +26,7 @@ def test_plugin_state_roundtrip(tmp_path) -> None:
     assert not path.with_suffix(".json.tmp").exists()
 
 
-def test_plugin_state_ignores_corrupted_file(tmp_path) -> None:
+def test_plugin_state_ignores_corrupted_file(tmp_path: Path) -> None:
     path = tmp_path / "plugin_state.json"
     path.write_text("{broken", encoding="utf-8")
     state = PluginState(path)

@@ -235,7 +235,9 @@ def test_send_message_rewrites_via_outgoing_filter(tmp_path: Path) -> None:
         chat = FriendChat(uid="u_1", uin=10002)
         await service.send_text(chat, "原文")
 
-        assert qq.sent_elements[0][0].text == "被插件改写"
+        element = qq.sent_elements[0][0]
+        assert isinstance(element, TextElement)
+        assert element.text == "被插件改写"
         recent = await storage.messages.list_recent(chat)
         assert recent[0].message.text == "被插件改写"
         await storage.close()
@@ -250,7 +252,10 @@ def test_send_message_aborts_when_filter_returns_none(tmp_path: Path) -> None:
         qq = FakeQQ()
         registry = PluginExtensionRegistry()
 
-        async def block(target: ChatTarget, elements: Sequence[MessageElement]):
+        async def block(
+            target: ChatTarget,
+            elements: Sequence[MessageElement],
+        ) -> tuple[ChatTarget, Sequence[MessageElement]] | None:
             return None
 
         registry.register_outgoing_message_filter("demo", block)

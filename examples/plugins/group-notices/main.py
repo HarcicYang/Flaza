@@ -76,9 +76,7 @@ class GroupNotices(FlazaPlugin):
         role = GroupMemberRole.ADMIN if event.is_set else GroupMemberRole.MEMBER
         member = await context.runtime.storage.members.get(event.group_id, event.uid)
         if member is None:
-            await context.runtime.storage.members.upsert(
-                GroupMember(group_id=event.group_id, uid=event.uid, role=role)
-            )
+            await context.runtime.storage.members.upsert(GroupMember(group_id=event.group_id, uid=event.uid, role=role))
         else:
             await context.runtime.storage.members.set_role(event.group_id, event.uid, role)
         roles = dict(context.runtime.state.group_roles())
@@ -116,11 +114,7 @@ class GroupNotices(FlazaPlugin):
             return event
         await context.runtime.storage.contacts.update_group_name(event.group_id, event.name_new)
         groups = [
-            (
-                group.model_copy(update={"name": event.name_new})
-                if group.group_id == event.group_id
-                else group
-            )
+            (group.model_copy(update={"name": event.name_new}) if group.group_id == event.group_id else group)
             for group in context.runtime.state.groups()
         ]
         context.runtime.state.groups.set(tuple(groups))

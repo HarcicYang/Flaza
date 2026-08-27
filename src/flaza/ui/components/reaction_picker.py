@@ -168,13 +168,13 @@ class ReactionPicker:
                 "bottom": None,
             }
         )
-        self._root.args = {**self._root.args, "data-neony-outside": "true"}
+        self._root.set_outside_click(True)
         self._open = True
 
     def show_above(self, *, from_me: bool = False) -> None:
         """在所属消息气泡上方显示，并按消息方向对齐。"""
         self._root.styles = _PANEL_ABOVE_RIGHT_OPEN if from_me else _PANEL_ABOVE_OPEN
-        self._root.args = {**self._root.args, "data-neony-outside": "true"}
+        self._root.set_outside_click(True)
         self._open = True
 
     def close(self) -> None:
@@ -183,7 +183,7 @@ class ReactionPicker:
             return
         self._open = False
         self._root.styles = self._root.styles.model_copy(update={"display": "none"})
-        self._root.args = {k: v for k, v in self._root.args.items() if k != "data-neony-outside"}
+        self._root.set_outside_click(False)
 
     def _bind_outside(self) -> None:
         self._root.on("outsideclick", self._on_outside_click)

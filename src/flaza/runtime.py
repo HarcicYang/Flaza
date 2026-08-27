@@ -82,6 +82,10 @@ class ApplicationRuntime:
     # ---- 属性 ----
 
     @property
+    def qq(self) -> LagrangeQQClient | None:
+        return self._qq
+
+    @property
     def account_service(self) -> AccountService | None:
         return self._account_service
 
@@ -105,11 +109,6 @@ class ApplicationRuntime:
         if self._neony_app is None:
             return
         await self._neony_app.render()
-
-    async def eval_js(self, script: str) -> str:
-        if self._neony_app is None:
-            return ""
-        return await self._neony_app.eval_js(script)
 
     async def open_files(
         self,

@@ -46,6 +46,12 @@ _STATE_DOT_COLORS = {
     "kicked": Color(hex="#ff453a"),
 }
 
+_TITLE_ICON = Styles(
+    border_radius="50%",
+    overflow="hidden",
+    background_size="cover",
+)
+
 _ICON_BUTTON = Styles(
     display="flex",
     align_items="center",
@@ -92,9 +98,6 @@ class ShellView:
         self._settings_return_screen = self._screen
         self._home: HomePage | None = None
 
-        titlebar = TitleBar(config.window.title, icon=Icon.image(friend_avatar_url(0)))
-        titlebar_root = titlebar.build()
-
         uin = Text("", role="secondary")
         uin.bind_text(state.self_info, fmt=lambda info: str(info.uin) if info is not None and info.uin else "")
         connection = Div(styles=_STATE_DOT)
@@ -113,44 +116,37 @@ class ShellView:
             "aria-label",
             fmt=lambda value: f"连接：{value.value}",
         )
-
-        spacer = Div(styles=Styles(flex_grow="1"))
         self._toolbar = Div(styles=_TOOLBAR)
 
-        left = titlebar_root.container[0]
-        if not isinstance(left, DOMElement):
-            raise RuntimeError("TitleBar 根结构不符合预期")
-        icon_el = left.container[0]
-        title_el = left.container[1] if len(left.container) > 1 else None
-        if isinstance(title_el, DOMElement):
-            title_el.bind_text(
-                state.self_info,
-                fmt=lambda info: info.nickname or "Flaza" if info is not None else "Flaza",
-            )
-            title_el.styles = title_el.styles.model_copy(update={"color": stub.text_primary})
-        if isinstance(icon_el, DOMElement):
-            icon_el.styles = icon_el.styles.model_copy(
-                update={
-                    "width": "22px",
-                    "height": "22px",
-                    "border_radius": "50%",
-                    "overflow": "hidden",
-                    "background_size": "cover",
-                }
-            )
-
-            def current_uin() -> int:
-                info = state.self_info()
-                return info.uin if info is not None else 0
-
-            self_uin = Computed(current_uin)
-            icon_el.bind_style(self_uin, "background_image", fmt=lambda uin: f"url({friend_avatar_url(int(uin))})")
+        avatar_icon = Icon.image(friend_avatar_url(0))
+        avatar = avatar_icon.render("22px")
+        avatar.styles = avatar.styles.model_copy(
+            update={key: getattr(_TITLE_ICON, key) for key in _TITLE_ICON.model_fields_set}
+        )
         uin_el = uin.build()
-        if isinstance(title_el, DOMElement):
-            left.container.insert(2, uin_el)
-        else:
-            left.container.append(uin_el)
-        left.container.extend([spacer, connection, self._toolbar])
+        spacer = Div(styles=Styles(flex_grow="1"))
+
+        def current_title() -> str:
+            info = state.self_info()
+            return (info.nickname or "Flaza") if info is not None else config.window.title
+
+        titlebar = TitleBar(
+            Computed(current_title),
+            leading=[avatar],
+        )
+        titlebar_root = titlebar.build()
+        # UIN、状态点和主工具栏保持标题在左侧；右侧只留给系统窗口按钮。
+        titlebar.leading_slot.container.extend([uin_el, spacer, connection, self._toolbar])
+
+        def current_uin() -> int:
+            info = state.self_info()
+            return info.uin if info is not None else 0
+
+        avatar.bind_style(
+            Computed(current_uin),
+            "background_image",
+            fmt=lambda uid: f"url({friend_avatar_url(int(uid))})",
+        )
 
         self._content = Div(
             styles=Styles(display="flex", flex_direction="column", flex_grow="1", min_height="0", overflow="hidden")
@@ -183,7 +179,7 @@ class ShellView:
                 self._bus,
                 self._config,
                 self._render,
-                plugin_registry=self._actions._runtime.plugin_registry,
+                plugin_registry=self._actions.plugin_registry,
             )
             self._home = home
             self._mount(home.root)

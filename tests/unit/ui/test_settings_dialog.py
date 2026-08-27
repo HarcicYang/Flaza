@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 from neony.dom import Animation, KeyFrame
+from neony.dom.base import DOMElement
 
 import flaza.ui.actions as actions_module
 from flaza.config import AppConfig
@@ -54,11 +55,11 @@ def test_settings_page_contains_plugin_directory_and_manager() -> None:
     assert _contains_text(page.root, "插件管理")
 
 
-def _contains_text(element, text: str) -> bool:
+def _contains_text(element: DOMElement, text: str) -> bool:
     for child in element.container:
         if child == text:
             return True
-        if hasattr(child, "container") and _contains_text(child, text):
+        if isinstance(child, DOMElement) and _contains_text(child, text):
             return True
     return False
 

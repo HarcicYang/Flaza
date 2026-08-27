@@ -15,11 +15,11 @@ logger = logging.getLogger(__name__)
 
 OutgoingMessageFilter = Callable[
     [ChatTarget, Sequence[MessageElement]],
-    tuple[ChatTarget, Sequence[MessageElement]] | Awaitable[tuple[ChatTarget, Sequence[MessageElement]]] | None,
+    tuple[ChatTarget, Sequence[MessageElement]] | Awaitable[tuple[ChatTarget, Sequence[MessageElement]] | None] | None,
 ]
 OutgoingFileFilter = Callable[
     [ChatTarget, str, str | None],
-    tuple[ChatTarget, str, str | None] | Awaitable[tuple[ChatTarget, str, str | None]] | None,
+    tuple[ChatTarget, str, str | None] | Awaitable[tuple[ChatTarget, str, str | None] | None] | None,
 ]
 RecallHook = Callable[[ChatTarget, int], bool | Awaitable[bool]]
 ElementRenderer = Callable[[PluginElement], Any]
@@ -34,7 +34,7 @@ MessageActionHandler = Callable[[StoredMessage], Awaitable[object]]
 class _OrderedEntry:
     plugin_id: str
     order: int
-    handler: Callable[..., Awaitable[object]]
+    handler: Callable[..., Any]
 
 
 @dataclass(frozen=True, slots=True)

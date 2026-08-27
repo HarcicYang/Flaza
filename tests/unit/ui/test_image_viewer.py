@@ -29,6 +29,7 @@ def test_viewer_open_close_and_actual_size() -> None:
         assert viewer._image.src == "https://example.com/pic.png"
         assert viewer._image.styles.transform == "translate(0.0px, 0.0px) scale(1.0)"
         assert viewer._fit is True
+        assert viewer._stage.styles.cursor == "default"
 
         await viewer._show_actual_size()
         assert viewer._fit is False
@@ -59,6 +60,7 @@ def test_viewer_zoom_clamps_and_double_click_toggles() -> None:
         await viewer._on_double_click(_event("dblclick"))
         assert viewer._scale == 1.0
         assert viewer._fit is True
+        assert viewer._stage.styles.cursor == "default"
 
     asyncio.run(scenario())
 
@@ -109,6 +111,39 @@ def test_viewer_drag_pans_image() -> None:
         assert viewer._offset_x == 30
         assert viewer._offset_y == 30
         assert "translate(30.0px, 30.0px)" in str(viewer._image.styles.transform)
+        assert viewer._stage.styles.cursor == "grab"
+
+    asyncio.run(scenario())
+
+
+def test_viewer_drag_uses_absolute_anchor_without_drift() -> None:
+    async def scenario() -> None:
+        viewer = _viewer([])
+        await viewer.open(ImagePreview(src="https://example.com/pic.png", width=640, height=480))
+        await viewer._show_actual_size()
+
+        await viewer._on_mousedown(DomEvent(key="stage", type="mousedown", source="user", x=100, y=80))
+        assert viewer._image.styles.transition == "none"
+        assert viewer._stage.styles.cursor == "grabbing"
+
+        # A real WebView may deliver a stale movement delta with the first move.
+        await viewer._on_pointermove(
+            DomEvent(
+                key="root",
+                type="pointermove",
+                source="user",
+                x=124,
+                y=96,
+                movement_x=-500,
+                movement_y=800,
+            )
+        )
+        await viewer._on_pointermove(DomEvent(key="root", type="pointermove", source="user", x=140, y=110))
+        await viewer._on_mouseup(DomEvent(key="root", type="mouseup", source="user"))
+
+        assert viewer._offset_x == 40
+        assert viewer._offset_y == 30
+        assert viewer._image.styles.transition == "transform 0.12s ease"
         assert viewer._stage.styles.cursor == "grab"
 
     asyncio.run(scenario())

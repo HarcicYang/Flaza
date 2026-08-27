@@ -2,6 +2,7 @@
 
 import asyncio
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from flaza.config import AppConfig, PathsConfig
@@ -50,7 +51,11 @@ def test_recall_keep_example_preserves_content_and_swallows_event(tmp_path: Path
         runtime.state.messages.set(tuple(await runtime.storage.messages.list_recent(chat)))
 
         seen_after_plugin = []
-        runtime.bus.subscribe(MessageRecalled, lambda event: seen_after_plugin.append(event.seq))
+
+        async def record_swallowed(event: MessageRecalled) -> None:
+            seen_after_plugin.append(event.seq)
+
+        runtime.bus.subscribe(MessageRecalled, record_swallowed)
         bus_task = asyncio.create_task(runtime.bus.run())
 
         runtime.bus.publish(MessageRecalled(chat=chat, seq=1, timestamp=2))
@@ -100,7 +105,11 @@ def test_recall_keep_example_unknown_message_does_not_swallow(tmp_path: Path) ->
 
         chat = FriendChat(uid="u_1", uin=10001)
         seen: list[int] = []
-        runtime.bus.subscribe(MessageRecalled, lambda event: seen.append(event.seq))
+
+        async def record_seen(event: MessageRecalled) -> None:
+            seen.append(event.seq)
+
+        runtime.bus.subscribe(MessageRecalled, record_seen)
         bus_task = asyncio.create_task(runtime.bus.run())
 
         runtime.bus.publish(MessageRecalled(chat=chat, seq=999, timestamp=2))
@@ -123,7 +132,7 @@ async def _wait_for_stored_message(runtime: ApplicationRuntime, chat: FriendChat
     raise AssertionError("recall-keep 插件未处理撤回事件")
 
 
-async def _wait_until(predicate) -> None:
+async def _wait_until(predicate: Callable[[], bool]) -> None:
     for _ in range(100):
         if predicate():
             return

@@ -288,10 +288,7 @@ def _build_element(
     if isinstance(element, AudioElement):
         src = _local_or_remote_url(element.url, element.cached_path)
         if src:
-            audio_component = MediaAudio(src, preload="none")
-            audio_component._media.styles = audio_component._media.styles.model_copy(
-                update=_AUDIO.model_dump(exclude_none=True)
-            )
+            audio_component = MediaAudio(src, preload="none", media_styles=_AUDIO)
             audio = audio_component.build()
             return audio
         return _card("语音", _format_duration(element.time))
