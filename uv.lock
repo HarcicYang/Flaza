@@ -237,7 +237,7 @@ requires-dist = [
     { name = "imageio-ffmpeg", specifier = ">=0.5.0" },
     { name = "lagrange-python", git = "https://github.com/HarcicYang/lagrange-python.git" },
     { name = "msgpack", specifier = ">=1.1" },
-    { name = "neony", editable = "../Neony" },
+    { name = "neony", specifier = ">=0.3.1" },
     { name = "packaging", specifier = ">=24.2" },
 ]
 
@@ -401,27 +401,16 @@ wheels = [
 [[package]]
 name = "neony"
 version = "0.3.1"
-source = { editable = "../Neony" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "imageio-ffmpeg" },
     { name = "lumiview" },
     { name = "pyclip" },
     { name = "pydantic" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "imageio-ffmpeg", specifier = ">=0.5.0" },
-    { name = "lumiview", specifier = "==0.1.0.dev5" },
-    { name = "pyclip", specifier = ">=0.7.0" },
-    { name = "pydantic", specifier = ">=2.13.4" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pyrefly", specifier = ">=0.60.0" },
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "ruff", specifier = ">=0.16.1" },
+sdist = { url = "https://files.pythonhosted.org/packages/06/13/3ed5b98cb90e4629b6c89db921bc691567b14e7e95cd28102b2e4b8fdae7/neony-0.3.1.tar.gz", hash = "sha256:a8d6566e8261bf73f50e1b48f4609e05f6324ec8eaece120145211de4e33bb59", size = 783744, upload-time = "2026-08-27T06:24:06.173Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/43/e1/62a2bf96277c725ed2315961a06bf8c1d060c7344205a08738e3402c21ec/neony-0.3.1-py3-none-any.whl", hash = "sha256:fb3a78071bd736ea03a6934117eb858f332dfbb5fb4bb3867e52b47104ada35f", size = 721710, upload-time = "2026-08-27T06:24:04.484Z" },
 ]
 
 [[package]]

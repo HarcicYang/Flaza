@@ -48,7 +48,3 @@ dev = [
     "pyrefly>=1.2.0",
     "nuitka>=4.1.3",
 ]
-
-[tool.uv.sources]
-# Flaza 当前依赖未发布的 Neony 公开 API；本地联动开发时始终使用工作区源码。
-neony = { path = "../Neony", editable = true }
