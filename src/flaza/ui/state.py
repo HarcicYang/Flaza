@@ -10,6 +10,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from operator import attrgetter
 from pathlib import Path
 from typing import Any
 
@@ -19,12 +20,15 @@ from flaza.core.events import (
     ConnectionStateChanged,
     ContactsUpdated,
     EventBus,
+    FriendPoked,
     GroupAdminChanged,
     GroupMemberJoined,
     GroupMemberMuted,
     GroupMemberQuit,
     GroupMembersUpdated,
     GroupNameChanged,
+    GroupNotice,
+    GroupNudged,
     GroupReactionChanged,
     LoginPhaseChanged,
     MessageMediaCached,
@@ -32,19 +36,26 @@ from flaza.core.events import (
     MessageReceived,
     MessageSent,
     MessagesSynced,
+    OtherClientsUpdated,
     QrCodeReady,
+    RequestReceived,
+    RequestResolved,
     SelfInfoChanged,
 )
 from flaza.core.models import (
     ChatTarget,
     ConnectionState,
     Friend,
+    FriendChat,
     Group,
     GroupChat,
     GroupMemberRole,
     LoginPhase,
+    MarketFaceElement,
     Message,
     MessageElement,
+    OnlineClient,
+    PendingRequest,
     SelfInfo,
     Session,
     StoredMessage,
@@ -57,6 +68,7 @@ logger = logging.getLogger(__name__)
 RenderCallback = Callable[[], Awaitable[None]]
 
 _STARTUP_WARM_CHATS = 6
+_STARTUP_WARM_CONCURRENCY = 3
 CHAT_MESSAGE_PAGE_SIZE = 20
 
 
@@ -99,10 +111,12 @@ class UiStateStore:
         render: RenderCallback | None = None,
         *,
         chat_cache_path: str | Path | None = None,
+        emoji_cache_path: str | Path | None = None,
     ) -> None:
         self._storage = storage
         self._render = render
         self._chat_cache_path = Path(chat_cache_path) if chat_cache_path else None
+        self._emoji_cache_path = Path(emoji_cache_path) if emoji_cache_path else None
 
         self.login_phase = Signal(LoginPhase.IDLE)
         self.login_detail = Signal("")
@@ -118,10 +132,15 @@ class UiStateStore:
         self.messages = Signal[tuple[StoredMessage, ...]](())
         self.pending_messages = Signal[tuple[StoredMessage, ...]](())
         self.notices = Signal[tuple[ChatNotice, ...]](())
+        self.requests = Signal[tuple[PendingRequest, ...]](())
+        self.other_clients = Signal[tuple[OnlineClient, ...]](())
+        self.selected_messages = Signal[tuple[StoredMessage, ...]](())
+        self.recent_market_faces = Signal[tuple[MarketFaceElement, ...]](())
         self.group_roles = Signal[dict[str, GroupMemberRole]]({})
         self.has_older_messages = Signal(False)
         self.reply_to = Signal[StoredMessage | None](None)
         self._state_refresh_suppressed = 0
+        self._next_pending_id = -1
         self._chat_messages_cache: dict[str, ChatMessagesSnapshot] = {}
         self._chat_cache_dirty = False
         self._chat_cache_closed = False
@@ -130,7 +149,7 @@ class UiStateStore:
         self._chat_cache_refresh_dirty: dict[str, bool] = {}
         self._chat_prebuilder: Callable[[ChatTarget, tuple[StoredMessage, ...]], None] | None = None
         self._warm_sessions_task: asyncio.Task[None] | None = None
-        self._next_pending_id = -1
+        self._emoji_save_task: asyncio.Task[None] | None = None
 
     def set_render(self, render: RenderCallback | None) -> None:
         """注入 Neony 渲染回调，由应用组装根调用。"""
@@ -283,11 +302,7 @@ class UiStateStore:
             self._chat_cache_refresh_tasks.pop(key, None)
 
     def begin_outgoing_message(self, chat: ChatTarget, elements: Sequence[MessageElement]) -> StoredMessage:
-        """把尚未确认的消息加入聊天流的乐观投影。
-
-        负数本地 ID 只存在于 UI 状态中；真实消息入库后使用正数 ID，
-        因此不会与会话缓存或存储层冲突。
-        """
+        """创建与成功态完全一致的乐观消息，仅用负数本地 id 标记未确认。"""
         info = self.self_info()
         message = Message(
             chat=chat,
@@ -309,6 +324,14 @@ class UiStateStore:
         pending = tuple(item for item in self.pending_messages() if item.id != stored.id)
         if pending != self.pending_messages():
             self.pending_messages.set(pending)
+
+    def remove_oldest_pending(self, chat: ChatTarget) -> None:
+        """按会话移除最早的一条乐观消息，与发送完成的 FIFO 顺序对应。"""
+        pending = self.pending_messages()
+        for index, item in enumerate(pending):
+            if item.message.chat.key == chat.key:
+                self.pending_messages.set((*pending[:index], *pending[index + 1 :]))
+                return
 
     async def _load_chat_messages_snapshot(self, chat: ChatTarget) -> ChatMessagesSnapshot:
         messages, has_older = await self._storage.messages.list_recent_with_has_before(
@@ -343,6 +366,84 @@ class UiStateStore:
             await asyncio.gather(save_task, return_exceptions=True)
         self._chat_cache_dirty = True
         await self.persist_chat_messages_cache()
+        emoji_task = self._emoji_save_task
+        self._emoji_save_task = None
+        if emoji_task is not None:
+            emoji_task.cancel()
+            await asyncio.gather(emoji_task, return_exceptions=True)
+        await self.persist_emoji_cache()
+
+    # ---- 最近表情缓存 ----
+
+    async def load_emoji_cache(self) -> None:
+        """启动时恢复最近使用过的商城表情。"""
+        if self._emoji_cache_path is None or not self._emoji_cache_path.exists():
+            return
+        try:
+            data = await asyncio.to_thread(self._emoji_cache_path.read_text, encoding="utf-8")
+            payload = json.loads(data)
+            faces = tuple(
+                MarketFaceElement.model_validate(item)
+                for item in payload.get("market_faces", [])
+                if isinstance(item, dict)
+            )
+            self.recent_market_faces.set(faces[:24])
+        except Exception:
+            logger.exception("加载最近表情缓存失败: %s", self._emoji_cache_path)
+
+    def remember_market_face(self, element: MarketFaceElement) -> None:
+        """把商城表情写入最近列表（去重、最多 24 个）。"""
+        faces = [item for item in self.recent_market_faces() if item.face_id != element.face_id]
+        faces.insert(0, element)
+        self.recent_market_faces.set(tuple(faces[:24]))
+        self._schedule_emoji_save()
+
+    def _remember_message_faces(self, message: Message) -> None:
+        for element in message.elements:
+            if isinstance(element, MarketFaceElement):
+                self.remember_market_face(element)
+
+    def _schedule_emoji_save(self) -> None:
+        if self._emoji_cache_path is None or self._emoji_save_task is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._save_emoji_cache_soon())
+        self._emoji_save_task = task
+        task.add_done_callback(self._emoji_save_done)
+
+    def _emoji_save_done(self, _task: asyncio.Task[None]) -> None:
+        self._emoji_save_task = None
+
+    async def _save_emoji_cache_soon(self) -> None:
+        try:
+            await asyncio.sleep(1)
+            await self.persist_emoji_cache()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("写入最近表情缓存失败")
+
+    async def persist_emoji_cache(self) -> None:
+        """把最近表情落盘；未配置路径时跳过。"""
+        if self._emoji_cache_path is None:
+            return
+        payload = {
+            "version": 1,
+            "market_faces": [item.model_dump(mode="json") for item in self.recent_market_faces()],
+        }
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        path = self._emoji_cache_path
+
+        def write() -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_name(f"{path.name}.tmp")
+            tmp_path.write_text(data, encoding="utf-8")
+            tmp_path.replace(path)
+
+        await asyncio.to_thread(write)
 
     def _schedule_chat_cache_save(self) -> None:
         if self._chat_cache_closed or self._chat_cache_path is None or self._chat_cache_save_task is not None:
@@ -381,6 +482,9 @@ class UiStateStore:
         bus.subscribe(MessageMediaCached, self._on_message_media_cached)
         bus.subscribe(MessagesSynced, self._on_messages_synced)
         bus.subscribe(MessageRecalled, self._on_message_recalled)
+        bus.subscribe(FriendPoked, self._on_friend_poked)
+        bus.subscribe(GroupNudged, self._on_group_nudged)
+        bus.subscribe(GroupNotice, self._on_group_notice)
         bus.subscribe(GroupNameChanged, self._on_group_name_changed)
         bus.subscribe(GroupMemberJoined, self._on_group_member_joined)
         bus.subscribe(GroupMemberQuit, self._on_group_member_quit)
@@ -388,10 +492,14 @@ class UiStateStore:
         bus.subscribe(GroupMemberMuted, self._on_group_member_muted)
         bus.subscribe(GroupMembersUpdated, self._on_group_members_updated)
         bus.subscribe(GroupReactionChanged, self._on_group_reaction_changed)
+        bus.subscribe(RequestReceived, self._on_request_received)
+        bus.subscribe(RequestResolved, self._on_request_resolved)
+        bus.subscribe(OtherClientsUpdated, self._on_other_clients)
 
     async def load_initial_state(self) -> None:
         """启动时从存储恢复联系人与会话摘要。"""
         await self.load_chat_messages_cache()
+        await self.load_emoji_cache()
         self.friends.set(tuple(await self._storage.contacts.list_friends()))
         self.groups.set(tuple(await self._storage.contacts.list_groups()))
         await self.refresh_sessions()
@@ -430,21 +538,26 @@ class UiStateStore:
 
     async def _warm_startup_chats(self) -> None:
         sessions = self.sessions()[:_STARTUP_WARM_CHATS]
-        for session in sessions:
-            try:
-                chat = session.chat
-                latest_id = await self._storage.messages.latest_id(chat)
-                snapshot = self.peek_chat_messages(chat)
-                if snapshot is not None and (latest_id or 0) == snapshot.last_message_id:
-                    if self._chat_prebuilder is not None:
-                        try:
-                            self._chat_prebuilder(chat, snapshot.messages)
-                        except Exception:
-                            logger.exception("预建会话消息失败: chat=%s", chat.key)
-                    continue
-                await self.refresh_chat_messages(chat)
-            except Exception:
-                logger.exception("后台预热会话失败: chat=%s", session.chat.key)
+        semaphore = asyncio.Semaphore(_STARTUP_WARM_CONCURRENCY)
+
+        async def warm(session: Session) -> None:
+            async with semaphore:
+                try:
+                    chat = session.chat
+                    latest_id = await self._storage.messages.latest_id(chat)
+                    snapshot = self.peek_chat_messages(chat)
+                    if snapshot is not None and (latest_id or 0) == snapshot.last_message_id:
+                        if self._chat_prebuilder is not None:
+                            try:
+                                self._chat_prebuilder(chat, snapshot.messages)
+                            except Exception:
+                                logger.exception("预建会话消息失败: chat=%s", chat.key)
+                        return
+                    await self.refresh_chat_messages(chat)
+                except Exception as error:
+                    logger.warning("后台预热会话失败: chat=%s: %r", session.chat.key, error)
+
+        await asyncio.gather(*(warm(session) for session in sessions), return_exceptions=True)
 
     async def refresh_sessions(self) -> None:
         """从存储重新加载会话摘要。"""
@@ -489,9 +602,13 @@ class UiStateStore:
         self.groups.set(tuple(event.groups))
 
     async def _on_message_received(self, event: MessageReceived) -> None:
+        self._remember_message_faces(event.message)
         await self._refresh_for_message(event.message)
 
     async def _on_message_sent(self, event: MessageSent) -> None:
+        self._remember_message_faces(event.message)
+        # 确认消息与原乐观气泡原位替换，避免先消失再出现的闪烁。
+        self.remove_oldest_pending(event.message.chat)
         await self._refresh_for_message(event.message)
 
     async def _on_message_media_cached(self, event: MessageMediaCached) -> None:
@@ -545,6 +662,50 @@ class UiStateStore:
         # 撤回灰条由 recalled 消息在原位渲染，不再额外追加 notice，避免同一条撤回显示两次。
         self.schedule_chat_messages_refresh(event.chat)
         await self.refresh_sessions()
+
+    async def _on_friend_poked(self, event: FriendPoked) -> None:
+        """好友戳一戳投影为对方会话的灰条。"""
+        chat = FriendChat(uid=event.sender_uid, uin=event.sender_uin)
+        sender = next(
+            (friend.display_name for friend in self.friends() if friend.uin == event.sender_uin),
+            str(event.sender_uin),
+        )
+        info = self.self_info()
+        self_uin = info.uin if info else 0
+        text = f"{sender} 戳了戳你" if event.target_uin in (0, self_uin) else f"{sender} 戳了戳 {event.target_uin}"
+        timestamp = event.timestamp or int(time.time())
+        self._append_notice(chat.key, text, timestamp, f"poke:{chat.key}:{timestamp}")
+
+    async def _on_group_nudged(self, event: GroupNudged) -> None:
+        """群戳一戳投影为对应群的灰条。"""
+        sender = await self._member_display_name(event.group_id, event.sender_uin)
+        info = self.self_info()
+        self_uin = info.uin if info else 0
+        if event.target_uin in (0, self_uin):
+            target = "你"
+        else:
+            target = await self._member_display_name(event.group_id, event.target_uin)
+        timestamp = int(time.time() * 1000)
+        self._append_notice(
+            f"group:{event.group_id}",
+            f"{sender} 戳了戳{target}",
+            timestamp,
+            f"nudge:{event.group_id}:{event.sender_uin}:{event.target_uin}:{timestamp}",
+        )
+
+    async def _on_group_notice(self, event: GroupNotice) -> None:
+        """其它群事件统一投影为灰条。"""
+        key = event.key or f"{event.kind}:{event.group_id}:{event.timestamp}"
+        self._append_notice(f"group:{event.group_id}", event.text, event.timestamp or int(time.time()), key)
+
+    async def _member_display_name(self, group_id: int, uin: int) -> str:
+        info = self.self_info()
+        if info is not None and uin == info.uin:
+            return "你"
+        for member in await self._storage.members.list_by_group(group_id):
+            if member.uin == uin:
+                return member.nickname or str(uin)
+        return str(uin)
 
     async def _on_group_name_changed(self, event: GroupNameChanged) -> None:
         groups = tuple(
@@ -638,6 +799,46 @@ class UiStateStore:
             return
         notices.append(ChatNotice(chat_key=chat_key, text=text, timestamp=timestamp, key=key))
         self.notices.set(tuple(notices))
+
+    def upsert_request(self, request: PendingRequest) -> None:
+        """写入或更新一条待处理申请，按时间排序。"""
+        requests = [item for item in self.requests() if item.key != request.key]
+        requests.append(request)
+        requests.sort(key=attrgetter("timestamp"))
+        self.requests.set(tuple(requests))
+
+    def merge_requests(self, requests: list[PendingRequest]) -> None:
+        """把服务端拉取到的完整申请合并进通知中心，保留本地已收到的条目。"""
+        merged = {item.key: item for item in self.requests()}
+        for request in requests:
+            merged[request.key] = request
+        self.requests.set(tuple(sorted(merged.values(), key=attrgetter("timestamp"))))
+
+    def resolve_request(self, key: str) -> None:
+        """移除一条已处理或已失效的申请。"""
+        requests = tuple(item for item in self.requests() if item.key != key)
+        if requests != self.requests():
+            self.requests.set(requests)
+
+    def toggle_message_selection(self, stored: StoredMessage) -> None:
+        """在多选转发集合里加入或移除一条消息。"""
+        selected = [item for item in self.selected_messages() if item.id != stored.id]
+        if len(selected) == len(self.selected_messages()):
+            selected.append(stored)
+        self.selected_messages.set(tuple(selected))
+
+    def clear_message_selection(self) -> None:
+        if self.selected_messages():
+            self.selected_messages.set(())
+
+    async def _on_request_received(self, event: RequestReceived) -> None:
+        self.upsert_request(event.request)
+
+    async def _on_request_resolved(self, event: RequestResolved) -> None:
+        self.resolve_request(event.key)
+
+    async def _on_other_clients(self, event: OtherClientsUpdated) -> None:
+        self.other_clients.set(tuple(event.clients))
 
     async def _request_render(self) -> None:
         if self._render is not None:

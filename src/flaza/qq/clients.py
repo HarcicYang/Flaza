@@ -1,22 +1,33 @@
-"""基于 lagrange-python 的 QQClient 实现。"""
+"""基于 hiro-qq 的 QQClient 实现。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import shutil
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from lagrange import Client
 from lagrange.client.message.decoder import parse_friend_msg, parse_grp_msg
-from lagrange.client.message.elems import At, AtAll, Quote, Text
+from lagrange.client.message.elems import (
+    At,
+    AtAll,
+    Emoji,
+    ForwardNode,
+    MarketFace,
+    MulitMsg,
+    Quote,
+    Text,
+)
 from lagrange.client.wtlogin.enum import QrCodeResult
 from lagrange.info import InfoManager
 from lagrange.info.app import AppInfo, app_list
+from lagrange.info.sig import SigInfo
 from lagrange.pb.message.msg_push import MsgPushBody
 from lagrange.pb.service.friend import GetFriendMsgRequest
 from lagrange.pb.service.group import PBGetGrpLastSeq, PBGetGrpMsgRequest
@@ -28,7 +39,9 @@ from flaza.core.events import EventBus
 from flaza.core.models import (
     AtAllElement,
     AtElement,
+    AudioElement,
     ChatTarget,
+    EmojiElement,
     Friend,
     FriendChat,
     Group,
@@ -36,26 +49,38 @@ from flaza.core.models import (
     GroupMember,
     GroupMemberRole,
     ImageElement,
+    MarketFaceElement,
     Message,
     MessageElement,
+    PendingRequest,
     PluginElement,
     QrCodeData,
     QrCodeState,
     QuoteElement,
+    RequestKind,
     SelfInfo,
     SilentLoginResult,
     TextElement,
+    UserProfile,
+    VideoElement,
 )
 from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.qq.adapter import LagrangeEventAdapter
 from flaza.qq.convert import (
     friend_message_to_domain,
     group_message_to_domain,
+    lagrange_audio_to_domain,
+    lagrange_elements_to_domain,
     lagrange_file_to_domain,
     lagrange_image_to_domain,
+    lagrange_video_to_domain,
 )
+from flaza.qq.sign_provider import SignFactory, load_sign_provider
 
 logger = logging.getLogger(__name__)
+
+_MESSAGE_PAGE_SIZE = 50
+_MESSAGE_FETCH_CONCURRENCY = 6
 
 _QR_STATE_MAP = {
     QrCodeResult.waiting_for_scan: QrCodeState.WAITING_FOR_SCAN,
@@ -67,7 +92,7 @@ _QR_STATE_MAP = {
 
 
 class LagrangeQQClient:
-    """协议端口 QQClient 的 lagrange-python 实现。"""
+    """协议端口 QQClient 的 hiro-qq 实现。"""
 
     def __init__(
         self,
@@ -93,14 +118,12 @@ class LagrangeQQClient:
             return
 
         app_info = self._load_app_info()
+        _seed_login_info(self._paths, self._login.uin)
         info = InfoManager(self._login.uin, self._paths.device_info_path, self._paths.sign_info_path)
         info.__enter__()
         self._info = info
 
-        sign = None
-        signer_url = _build_signer_url(self._login.signer_url, self._login.signer_token)
-        if signer_url:
-            sign = sign_provider(signer_url, self._login.uin, info.device.guid, app_info.qua)
+        sign = _build_sign(self._login, info, app_info)
 
         client = Client(
             self._login.uin,
@@ -108,6 +131,8 @@ class LagrangeQQClient:
             info.device,
             info.sig_info,
             sign,
+            use_ipv6=self._login.use_ipv6,
+            use_optimum=self._login.use_optimum,
         )
         self._adapter.subscribe(client)
         client.connect()
@@ -324,11 +349,239 @@ class LagrangeQQClient:
         else:
             raise TypeError(f"未知会话目标: {target!r}")
 
+    async def send_nudge(self, target: ChatTarget, uin: int) -> None:
+        """向好友或群成员发送戳一戳。"""
+        client = self._require_client()
+        if not uin:
+            raise ValueError("戳一戳缺少目标 uin")
+        if isinstance(target, FriendChat):
+            await client.send_nudge(uin)
+        elif isinstance(target, GroupChat):
+            await client.send_nudge(uin, target.group_id)
+        else:
+            raise TypeError(f"未知会话目标: {target!r}")
+
+    async def respond_friend_request(self, uid: str, accept: bool) -> None:
+        """同意或拒绝一条好友申请。"""
+        await self._require_client().set_friend_request(uid, accept)
+
+    async def fetch_group_requests(self) -> list[PendingRequest]:
+        """拉取待处理的入群申请与群邀请，保留处理所需的 seq/event_type。"""
+        response = await self._require_client().fetch_grp_request(20)
+        requests: list[PendingRequest] = []
+        for raw in response.requests:
+            group_id = int(getattr(raw.group, "grp_id", 0) or 0)
+            group_name = str(getattr(raw.group, "grp_name", "") or "")
+            target_uid = str(getattr(raw.target, "uid", "") or "")
+            target_name = str(getattr(raw.target, "name", "") or "")
+            invitor = getattr(raw, "invitor", None)
+            invitor_name = str(getattr(invitor, "name", "") or "") if invitor is not None else ""
+            event_type = int(getattr(raw, "event_type", 0) or 0)
+            if event_type == 2:
+                kind = RequestKind.GROUP_INVITE
+                title = f"{invitor_name or '有人'}邀请你加入“{group_name or group_id}”"
+                key = f"group-invite:{group_id}"
+            else:
+                kind = RequestKind.GROUP_JOIN
+                title = f"{target_name or target_uid} 申请加入“{group_name or group_id}”"
+                key = f"group-join:{group_id}:{target_uid}"
+            requests.append(
+                PendingRequest(
+                    key=key,
+                    kind=kind,
+                    title=title,
+                    subtitle=str(getattr(raw, "comment", "") or ""),
+                    target_uid=target_uid,
+                    group_id=group_id,
+                    group_name=group_name,
+                    seq=int(getattr(raw, "seq", 0) or 0),
+                    event_type=event_type,
+                    timestamp=int(time.time()),
+                )
+            )
+        return requests
+
+    async def respond_group_request(self, group_id: int, seq: int, event_type: int, accept: bool) -> None:
+        """同意或拒绝一条入群申请/群邀请；hiro-qq 约定 action 1/2 为同意/拒绝。"""
+        await self._require_client().set_grp_request(group_id, seq, event_type, 1 if accept else 2)
+
+    async def fetch_user_profile(self, uid: str = "", uin: int = 0) -> UserProfile:
+        """拉取好友或群成员资料卡。"""
+        client = self._require_client()
+        key: str | int = uid or uin
+        if not key:
+            raise ValueError("资料卡缺少 uid/uin")
+        info = await client.get_user_info(key)
+        location = " ".join(part for part in (info.country, info.province, info.city) if part)
+        return UserProfile(
+            uid=uid,
+            uin=uin,
+            nickname=info.name,
+            bio=info.personal_sign,
+            sex=getattr(info.sex, "name", "unknown"),
+            age=info.age,
+            location=location,
+            qid=info.qid,
+        )
+
+    async def like_friend(self, uid: str) -> int:
+        """给好友名片点赞，返回本次新增的赞数。"""
+        if not uid:
+            raise ValueError("点赞缺少目标 uid")
+        response = await self._require_client().friend_like(uid, 1)
+        return int(getattr(response, "added", 0) or 0)
+
+    async def set_self_nickname(self, nickname: str) -> None:
+        """修改当前账号昵称。"""
+        if not nickname.strip():
+            raise ValueError("昵称不能为空")
+        await self._require_client().set_nickname(nickname.strip())
+
+    async def set_self_bio(self, bio: str) -> None:
+        """修改当前账号个性签名。"""
+        await self._require_client().set_bio(bio.strip())
+
+    async def set_self_avatar(self, path: str) -> None:
+        """上传并修改当前账号头像。"""
+        client = self._require_client()
+        with open(path, "rb") as image:
+            await client.set_avatar(image)
+
+    # ---- 群管理 ----
+
+    async def rename_group(self, group_id: int, name: str) -> None:
+        """修改群名称。"""
+        if not name.strip():
+            raise ValueError("群名称不能为空")
+        await self._require_client().rename_grp_name(group_id, name.strip())
+
+    async def rename_group_member(self, group_id: int, uid: str, name: str) -> None:
+        """修改指定成员的群名片。"""
+        await self._require_client().rename_grp_member(group_id, uid, name.strip())
+
+    async def kick_group_member(self, group_id: int, uin: int) -> None:
+        """把成员移出群聊。"""
+        if not uin:
+            raise ValueError("移出成员缺少 uin")
+        await self._require_client().kick_grp_member(group_id, uin)
+
+    async def set_group_admin(self, group_id: int, uid: str, is_set: bool) -> None:
+        """设置或取消群管理员。"""
+        await self._require_client().set_grp_admin(group_id, uid, is_set)
+
+    async def set_group_special_title(self, group_id: int, uid: str, title: str) -> None:
+        """设置群成员专属头衔。"""
+        await self._require_client().set_grp_special_title(group_id, uid, title.strip())
+
+    async def set_group_mute(self, group_id: int, enable: bool) -> None:
+        """开启或解除全员禁言。"""
+        await self._require_client().set_mute_grp(group_id, enable)
+
+    async def mute_group_member(self, group_id: int, uin: int, duration: int) -> None:
+        """禁言指定成员。"""
+        if not uin:
+            raise ValueError("禁言缺少目标 uin")
+        await self._require_client().set_mute_member(group_id, uin, max(0, duration))
+
+    async def leave_group(self, group_id: int) -> None:
+        """退出群聊。"""
+        await self._require_client().leave_grp(group_id)
+
+    async def invite_group_members(self, group_id: int, uids: list[str] | dict[str, int]) -> None:
+        """邀请好友加入群聊。"""
+        if not uids:
+            return
+        await self._require_client().invite_grp_member(group_id, uids)
+
+    async def set_group_essence(self, group_id: int, seq: int, rand: int, is_remove: bool = False) -> None:
+        """设置或取消群精华消息。"""
+        if not seq or not rand:
+            raise ValueError("精华消息缺少 seq/rand")
+        await self._require_client().set_essence(group_id, seq, rand, is_remove=is_remove)
+
+    async def fetch_forward_messages(self, chat: ChatTarget, resid: str) -> list[Message]:
+        """拉取合并转发卡片中的消息内容。"""
+        if not resid:
+            raise ValueError("转发消息缺少 resid")
+        forward = await self._require_client().get_forward_msg(resid, is_group=isinstance(chat, GroupChat))
+        messages: list[Message] = []
+        for node in forward.messages:
+            messages.append(
+                Message(
+                    chat=chat,
+                    sender_uin=node.sender_uin,
+                    sender_uid="",
+                    sender_name=node.sender_nick or str(node.sender_uin),
+                    seq=0,
+                    rand=0,
+                    timestamp=node.timestamp,
+                    elements=lagrange_elements_to_domain(list(node.content)),
+                )
+            )
+        return messages
+
+    async def fetch_message(self, chat: ChatTarget, seq: int) -> Message | None:
+        """按 seq 重新拉取单条消息，解码器补丁会优先使用现代图片元素。"""
+        if seq <= 0:
+            return None
+        client = self._require_client()
+        if isinstance(chat, FriendChat):
+            raw = await _fetch_friend_messages(client, chat.uid, seq, seq)
+            messages = [friend_message_to_domain(item, client.uin) for item in raw]
+        elif isinstance(chat, GroupChat):
+            raw = await _fetch_group_messages(client, chat.group_id, seq, seq)
+            messages = [group_message_to_domain(item, client.uin) for item in raw]
+        else:
+            raise TypeError(f"未知会话目标: {chat!r}")
+        return next((message for message in messages if message.seq == seq), None)
+
+    async def forward_messages(self, target: ChatTarget, messages: list[Message]) -> None:
+        """把消息作为合并转发卡片发送到目标会话。"""
+        if not messages:
+            raise ValueError("没有可转发的消息")
+        nodes: list[ForwardNode] = []
+        for message in messages:
+            nodes.append(
+                ForwardNode(
+                    content=await self._build_forward_content(target, message),
+                    sender_uin=message.sender_uin,
+                    sender_nick=message.sender_name or str(message.sender_uin),
+                    timestamp=message.timestamp,
+                )
+            )
+        forward = MulitMsg(messages=nodes)
+        client = self._require_client()
+        if isinstance(target, GroupChat):
+            await client.send_grp_forward_msg(forward, target.group_id)
+        elif isinstance(target, FriendChat):
+            await client.send_friend_forward_msg(forward, target.uid)
+        else:
+            raise TypeError(f"未知会话目标: {target!r}")
+
+    async def _build_forward_content(self, target: ChatTarget, message: Message) -> list[Any]:
+        """把领域消息转换为转发节点内容；媒体尽力保留，未知类型降级为文字占位。"""
+        content: list[Any] = []
+        for element in message.elements:
+            if isinstance(element, TextElement):
+                content.append(Text(text=element.text))
+            elif isinstance(element, AtElement):
+                content.append(At(uin=element.uin, uid=element.uid, text=element.text))
+            elif isinstance(element, AtAllElement):
+                content.append(AtAll(text=element.text))
+            elif isinstance(element, ImageElement) and (element.cached_path or element.local_path):
+                content.append(await self._upload_image(target, element.cached_path or element.local_path))
+            else:
+                content.append(Text(text=str(getattr(element, "preview_text", "[消息]"))))
+        if not content:
+            content.append(Text(text="[空消息]"))
+        return content
+
     async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
         """补拉指定会话在 after_seq 之后的消息，单会话最多拉取 limit 条。
 
         lagrange 自带的 get_friend_msg / get_grp_msg 对空历史和部分空响应
         使用 assert，因此这里直接发送相同协议包并宽容解析响应。
+        分页之间用有界并发拉取，最后按 seq 顺序合并，缩短长历史的等待时间。
         """
         client = self._require_client()
         if isinstance(chat, FriendChat):
@@ -336,25 +589,23 @@ class LagrangeQQClient:
             start = _sync_start(after_seq, latest, limit)
             if start is None:
                 return []
-            messages: list[Message] = []
-            while start <= latest:
-                end = min(start + 49, latest)
-                raw_messages = await _fetch_friend_messages(client, chat.uid, start, end)
-                messages.extend(friend_message_to_domain(raw, client.uin) for raw in raw_messages)
-                start = end + 1
-            return messages
+
+            async def fetch_page(page_start: int, page_end: int) -> list[Message]:
+                raw_messages = await _fetch_friend_messages(client, chat.uid, page_start, page_end)
+                return [friend_message_to_domain(raw, client.uin) for raw in raw_messages]
+
+            return await _fetch_message_pages(chat.key, _page_ranges(start, latest), fetch_page)
         if isinstance(chat, GroupChat):
             latest = await _get_group_last_seq(client, chat.group_id)
             start = _sync_start(after_seq, latest, limit)
             if start is None:
                 return []
-            messages = []
-            while start <= latest:
-                end = min(start + 49, latest)
-                raw_messages = await _fetch_group_messages(client, chat.group_id, start, end)
-                messages.extend(group_message_to_domain(raw, client.uin) for raw in raw_messages)
-                start = end + 1
-            return messages
+
+            async def fetch_group_page(page_start: int, page_end: int) -> list[Message]:
+                raw_messages = await _fetch_group_messages(client, chat.group_id, page_start, page_end)
+                return [group_message_to_domain(raw, client.uin) for raw in raw_messages]
+
+            return await _fetch_message_pages(chat.key, _page_ranges(start, latest), fetch_group_page)
         raise TypeError(f"未知会话目标: {chat!r}")
 
     # ---- 内部方法 ----
@@ -396,6 +647,19 @@ class LagrangeQQClient:
             if self._plugin_registry is None:
                 raise RuntimeError("插件消息段发送器未注册")
             return await self._plugin_registry.convert_plugin_element(target, element)
+        if isinstance(element, EmojiElement):
+            return Emoji(id=element.id), element
+        if isinstance(element, MarketFaceElement):
+            return (
+                MarketFace(
+                    name=element.name,
+                    face_id=element.face_id,
+                    tab_id=element.tab_id,
+                    width=element.width,
+                    height=element.height,
+                ),
+                element,
+            )
         if isinstance(element, ImageElement) and element.local_path:
             uploaded = await self._upload_image(target, element.local_path)
             if isinstance(target, GroupChat) and getattr(uploaded, "id", 0) == 0:
@@ -404,6 +668,16 @@ class LagrangeQQClient:
             domain = lagrange_image_to_domain(uploaded)
             # 自己发送的图片暂时没有媒体缓存，先复用本地原图路径渲染，
             # 后续收到协议回包/媒体缓存后再替换为缓存路径。
+            return uploaded, domain.model_copy(update={"cached_path": element.local_path})
+        if isinstance(element, AudioElement) and element.local_path:
+            uploaded = await self._upload_audio(target, element.local_path)
+            logger.info("语音上传完成: chat=%s name=%s", target.key, uploaded.name)
+            domain = lagrange_audio_to_domain(uploaded)
+            return uploaded, domain.model_copy(update={"cached_path": element.local_path})
+        if isinstance(element, VideoElement) and element.local_path:
+            uploaded = await self._upload_video(target, element.local_path)
+            logger.info("视频上传完成: chat=%s name=%s", target.key, uploaded.name)
+            domain = lagrange_video_to_domain(uploaded)
             return uploaded, domain.model_copy(update={"cached_path": element.local_path})
         raise TypeError(f"暂不支持的发送元素: {type(element).__name__}")
 
@@ -415,6 +689,26 @@ class LagrangeQQClient:
                 return await client.upload_friend_image(image, target.uid)
             if isinstance(target, GroupChat):
                 return await client.upload_grp_image(image, target.group_id)
+        raise TypeError(f"未知会话目标: {target!r}")
+
+    async def _upload_video(self, target: ChatTarget, path: str) -> Any:
+        """把本地视频上传到对应会话并返回 lagrange Video。"""
+        client = self._require_client()
+        with open(path, "rb") as video:
+            if isinstance(target, FriendChat):
+                return await client.upload_friend_video(video, target.uid)
+            if isinstance(target, GroupChat):
+                return await client.upload_grp_video(video, target.group_id)
+        raise TypeError(f"未知会话目标: {target!r}")
+
+    async def _upload_audio(self, target: ChatTarget, path: str) -> Any:
+        """把本地语音上传到对应会话并返回 lagrange Audio。"""
+        client = self._require_client()
+        with open(path, "rb") as audio:
+            if isinstance(target, FriendChat):
+                return await client.upload_friend_audio(audio, target.uid)
+            if isinstance(target, GroupChat):
+                return await client.upload_grp_audio(audio, target.group_id)
         raise TypeError(f"未知会话目标: {target!r}")
 
     async def _poll_friend_latest_seq(self, client: Client, uid: str, before_seq: int, timeout: float = 5.0) -> int:
@@ -569,9 +863,41 @@ def _sync_start(after_seq: int, latest_seq: int, limit: int) -> int | None:
     return after_seq + 1
 
 
+def _page_ranges(start: int, latest: int, page_size: int = _MESSAGE_PAGE_SIZE) -> list[tuple[int, int]]:
+    """把补拉区间切分成协议分页。"""
+    return [(page_start, min(page_start + page_size - 1, latest)) for page_start in range(start, latest + 1, page_size)]
+
+
+async def _fetch_message_pages[PageItem](
+    chat_key: str,
+    ranges: Sequence[tuple[int, int]],
+    fetch_page: Callable[[int, int], Awaitable[list[PageItem]]],
+) -> list[PageItem]:
+    """有界并发拉取分页，按分页顺序合并；单页失败不影响其他页。"""
+    if not ranges:
+        return []
+    semaphore = asyncio.Semaphore(_MESSAGE_FETCH_CONCURRENCY)
+
+    async def run(page_range: tuple[int, int]) -> list[PageItem]:
+        async with semaphore:
+            return await fetch_page(*page_range)
+
+    results = await asyncio.gather(*(run(page_range) for page_range in ranges), return_exceptions=True)
+    pages: list[list[PageItem]] = []
+    for (page_start, page_end), result in zip(ranges, results, strict=True):
+        if isinstance(result, BaseException):
+            logger.warning("消息分页拉取失败: chat=%s range=%s-%s: %r", chat_key, page_start, page_end, result)
+            continue
+        pages.append(result)
+    return [message for page in pages for message in page]
+
+
 def _build_signer_url(base_url: str, token: str) -> str | None:
     """把配置中的签名服务地址构造成 lagrange 需要的完整 URL。"""
     if not base_url:
+        return None
+    parts = urlsplit(base_url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
         return None
     endpoint = (
         base_url if base_url.rstrip("/").endswith("/api/sign/sec-sign") else f"{base_url.rstrip('/')}/api/sign/sec-sign"
@@ -582,3 +908,64 @@ def _build_signer_url(base_url: str, token: str) -> str | None:
     parts = urlsplit(endpoint)
     netloc = f"{quote(token, safe='')}@{parts.netloc}"
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def _load_custom_sign_factory(login: LoginConfig) -> SignFactory | None:
+    """加载自定义签名工厂；未启用或文件缺失时返回 None 以便回退。"""
+    if not login.use_custom_sign_provider:
+        return None
+    try:
+        return load_sign_provider(login.sign_provider_path, login.sign_provider_entry)
+    except FileNotFoundError:
+        logger.warning("自定义签名文件不存在，回退到签名服务: %s", login.sign_provider_path)
+    except Exception:
+        logger.exception("自定义签名文件加载失败，回退到签名服务: %s", login.sign_provider_path)
+    return None
+
+
+def _build_sign(login: LoginConfig, info: InfoManager, app_info: AppInfo) -> Any:
+    """构造 hiro-qq 需要的签名回调，优先使用本地自定义签名实现。"""
+    signer_url = _build_signer_url(login.signer_url, login.signer_token)
+    factory = _load_custom_sign_factory(login)
+    if factory is not None:
+        logger.info("使用自定义签名实现: %s", login.sign_provider_path)
+        return factory(signer_url, login.uin, info.device.guid, app_info.qua)
+    if signer_url:
+        return sign_provider(signer_url, login.uin, info.device.guid, app_info.qua)
+    return None
+
+
+def _seed_login_info(paths: PathsConfig, uin: int) -> None:
+    """首次运行时从本地 lagrange-python 目录迁移同一账号的设备与签名信息。
+
+    只补齐缺失的目标文件，不覆盖 Flaza 自己已经维护的登录状态；源文件
+    与配置 uin 不一致时跳过，避免把其他账号的凭据搬进来。
+    """
+    source_dir = Path(paths.login_info_source_dir).expanduser() if paths.login_info_source_dir else None
+    if source_dir is None or not source_dir.is_dir():
+        return
+    device_target = Path(paths.device_info_path)
+    sig_target = Path(paths.sign_info_path)
+    if device_target.exists() and sig_target.exists():
+        return
+
+    source_device = source_dir / "device.json"
+    source_sig = source_dir / "sig.bin"
+    if not source_device.is_file() or not source_sig.is_file():
+        return
+    try:
+        source_uin = SigInfo.load(source_sig.read_bytes()).uin
+    except Exception:
+        logger.warning("无法读取待迁移的签名信息: %s", source_sig, exc_info=True)
+        return
+    if source_uin != uin:
+        logger.warning("本地登录信息属于其他账号，跳过迁移: source=%s config=%s", source_uin, uin)
+        return
+
+    device_target.parent.mkdir(parents=True, exist_ok=True)
+    sig_target.parent.mkdir(parents=True, exist_ok=True)
+    if not device_target.exists():
+        shutil.copy2(source_device, device_target)
+    if not sig_target.exists():
+        shutil.copy2(source_sig, sig_target)
+    logger.info("已从 %s 迁移登录信息", source_dir)

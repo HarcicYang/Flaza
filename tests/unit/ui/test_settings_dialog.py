@@ -8,8 +8,9 @@ from neony.dom import Animation, KeyFrame
 from neony.dom.base import DOMElement
 
 import flaza.ui.actions as actions_module
-from flaza.config import AppConfig
+from flaza.config import AppConfig, LoginConfig
 from flaza.runtime import ApplicationRuntime
+from flaza.ui.components.login_config_form import LoginConfigForm
 from flaza.ui.pages.settings import SettingsPage
 
 
@@ -45,6 +46,18 @@ def test_settings_page_contains_login_form_and_theme() -> None:
         "last": "上次位置",
         "bottom": "自动回到底部",
     }
+
+
+def test_login_config_form_roundtrips_network_switches() -> None:
+    form = LoginConfigForm(LoginConfig(uin=123, use_ipv6=False, use_optimum=False))
+
+    values = form.values()
+
+    assert values.use_ipv6 is False
+    assert values.use_optimum is False
+    defaults = LoginConfigForm(LoginConfig(uin=123)).values()
+    assert defaults.use_ipv6 is True
+    assert defaults.use_optimum is True
 
 
 def test_settings_page_contains_plugin_directory_and_manager() -> None:
@@ -140,7 +153,7 @@ def test_settings_page_mounts_with_open_animation() -> None:
     assert animation.duration == "0.22s"
 
 
-def test_register_page_keyframes_registers_in_and_out() -> None:
+def test_register_page_keyframes_registers_ui_motion() -> None:
     from flaza.app import register_page_keyframes
 
     class _FakeApp:
@@ -153,4 +166,15 @@ def test_register_page_keyframes_registers_in_and_out() -> None:
 
     fake = _FakeApp()
     register_page_keyframes(fake)  # type: ignore[arg-type]
-    assert fake.names == ["flaza-page-in", "flaza-page-out"]
+    assert fake.names == [
+        "flaza-page-in",
+        "flaza-page-out",
+        "flaza-msg-in",
+        "flaza-msg-out",
+        "flaza-notice-in",
+        "flaza-badge-pop",
+        "flaza-badge-pop-alt",
+        "flaza-viewer-in",
+        "flaza-viewer-out",
+        "flaza-image-in",
+    ]

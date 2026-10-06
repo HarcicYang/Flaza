@@ -1,6 +1,8 @@
 """lagrange 事件到领域模型的转换测试。"""
 
-from typing import Any
+import json
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from lagrange.client.events.friend import FriendMessage
@@ -13,6 +15,8 @@ from lagrange.client.message.elems import (
     File,
     Image,
     Json,
+    Keyboard,
+    Markdown,
     MarketFace,
     MulitMsg,
     Poke,
@@ -25,11 +29,13 @@ from flaza.core.models import (
     AtAllElement,
     AtElement,
     AudioElement,
+    CardElement,
     EmojiElement,
     FileElement,
     ForwardElement,
     GroupMemberRole,
     ImageElement,
+    MarkdownElement,
     MarketFaceElement,
     MessageElement,
     PokeElement,
@@ -91,7 +97,7 @@ def _friend_event(*elements: Any) -> FriendMessage:
         to_uid="u_2",
         seq=7,
         client_seq=8,
-        msg_id=9,
+        rand=9,
         timestamp=1700000000,
         msg="",
         msg_chain=list(elements),
@@ -151,7 +157,7 @@ def test_self_sent_friend_message_uses_peer_target() -> None:
         to_uid="u_1",
         seq=8,
         client_seq=9,
-        msg_id=10,
+        rand=10,
         timestamp=1700000000,
         msg="你好",
         msg_chain=[Text(text="你好")],
@@ -241,7 +247,7 @@ def test_group_message_conversion() -> None:
             "[回复] 原文",
         ),
         (MulitMsg(resid="resid-1", file_name="聊天记录"), ForwardElement, "[聊天记录]"),
-        (Json(raw=b"{}"), UnknownElement, "[卡片消息]"),
+        (Json(raw=b"{}"), CardElement, "[卡片消息]"),
     ],
 )
 def test_non_text_elements_are_mapped_exactly(
@@ -263,6 +269,59 @@ def test_market_face_keeps_display_fields() -> None:
     assert isinstance(element, MarketFaceElement)
     assert element.tab_id == 2
     assert element.url == "https://i.gtimg.cn/club/item/parcel/item/61/61616262/120x120.png"
+
+
+def test_json_card_extracts_title_description_source_and_url() -> None:
+    payload = {
+        "app": "com.tencent.structmsg",
+        "desc": "新闻",
+        "prompt": "[分享]标题",
+        "meta": {
+            "news": {
+                "title": "真正的标题",
+                "desc": "卡片摘要",
+                "source": "示例来源",
+                "jumpUrl": "https://example.com/news",
+                "preview": "https://example.com/preview.png",
+            }
+        },
+    }
+    message = friend_message_to_domain(_friend_event(Json(raw=json.dumps(payload).encode())), self_uin=10002)
+
+    element = message.elements[0]
+    assert isinstance(element, CardElement)
+    assert element.raw_kind == "json"
+    assert element.title == "真正的标题"
+    assert element.description == "卡片摘要"
+    assert element.source == "示例来源"
+    assert element.url == "https://example.com/news"
+    assert element.preview_url == "https://example.com/preview.png"
+    assert element.preview_text == "[真正的标题]"
+
+
+def test_markdown_element_keeps_raw_content() -> None:
+    message = friend_message_to_domain(_friend_event(Markdown(content="# 标题\n正文")), self_uin=10002)
+
+    element = message.elements[0]
+    assert isinstance(element, MarkdownElement)
+    assert element.text == "# 标题\n正文"
+
+
+def test_keyboard_message_collects_button_labels() -> None:
+    row = SimpleNamespace(
+        buttons=[
+            SimpleNamespace(render_data=SimpleNamespace(label="点赞")),
+            SimpleNamespace(render_data=SimpleNamespace(label="打开")),
+        ]
+    )
+    keyboard = Keyboard(content=cast(Any, [SimpleNamespace(rows=[row])]), bot_appid=1)
+
+    message = friend_message_to_domain(_friend_event(keyboard), self_uin=10002)
+
+    element = message.elements[0]
+    assert isinstance(element, CardElement)
+    assert element.raw_kind == "keyboard"
+    assert element.description == "点赞 / 打开"
 
 
 def test_audio_video_file_keep_md5_for_cache_keys() -> None:

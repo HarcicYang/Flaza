@@ -214,9 +214,9 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
+    { name = "hiro-qq" },
     { name = "httpx" },
     { name = "imageio-ffmpeg" },
-    { name = "lagrange-python" },
     { name = "msgpack" },
     { name = "neony" },
     { name = "packaging" },
@@ -233,11 +233,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
+    { name = "hiro-qq", git = "https://github.com/HarcicYang/hiro-qq.git" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "imageio-ffmpeg", specifier = ">=0.5.0" },
-    { name = "lagrange-python", git = "https://github.com/HarcicYang/lagrange-python.git" },
     { name = "msgpack", specifier = ">=1.1" },
-    { name = "neony", specifier = ">=0.3.1" },
+    { name = "neony", specifier = ">=0.4.0" },
     { name = "packaging", specifier = ">=24.2" },
 ]
 
@@ -256,6 +256,16 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
+]
+
+[[package]]
+name = "hiro-qq"
+version = "0.1.9"
+source = { git = "https://github.com/HarcicYang/hiro-qq.git#dd38da9a69d851adbb9b02d43a3c33308a369dd6" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "qrcode" },
+    { name = "typing-extensions" },
 ]
 
 [[package]]
@@ -319,31 +329,21 @@ wheels = [
 ]
 
 [[package]]
-name = "lagrange-python"
-version = "0.1.8"
-source = { git = "https://github.com/HarcicYang/lagrange-python.git#2bf0d64f8129e46ebbcbb2b698997065dfa8d35c" }
-dependencies = [
-    { name = "cryptography" },
-    { name = "qrcode" },
-    { name = "typing-extensions" },
-]
-
-[[package]]
 name = "lumiview"
-version = "0.1.0.dev5"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cattrs" },
     { name = "typing-extensions" },
     { name = "wryview" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1e/fd/0020f749366c25cbefc26dd7f7682265a616b5cfa473cb0ab58029bbab7d/lumiview-0.1.0.dev5.tar.gz", hash = "sha256:477f470d57e00485880002e9734d8ffd4323424529171f9c20b2b18b6b123bcb", size = 148796, upload-time = "2026-08-07T08:06:34.148Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/c6/57e62756a9fd3f5042f642fe2a8bbca39c5df1096556d6a71972732edbb1/lumiview-0.1.2.tar.gz", hash = "sha256:23cebb93c13e40ab11662ae479e3a4e781105b6462505d23d337160f1fe1668d", size = 149113, upload-time = "2026-08-29T12:16:37.459Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f7/29/3d50510460446f3a8d11d054191d1664f90d276c776a59ab6fe6e16809ef/lumiview-0.1.0.dev5-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:23fdfbc5b9a47717abd45f2b71e3678dabdd9ecbc130ac7b4c3f1c864645986f", size = 906942, upload-time = "2026-08-07T08:06:26.179Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/7c/0d8b6f39445bf18fd6b8663e8a30a7f4478cf59f8ee83c27b5d7c20f6569/lumiview-0.1.0.dev5-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:a9d9757dffbc96dd76d78abe8be9c1d8117010890f22e7f04cbf734c4c3209e3", size = 864559, upload-time = "2026-08-07T08:06:27.851Z" },
-    { url = "https://files.pythonhosted.org/packages/ff/3f/ee5bd4eda8683a1ae1c1ed31caec91fbb1a6a54b860b3c848e5fbd9f5db4/lumiview-0.1.0.dev5-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:1de85253509046c3bd8d068b134c726e3d40a6ff9aae16dfd307e86c6541382e", size = 854766, upload-time = "2026-08-07T08:06:29.544Z" },
-    { url = "https://files.pythonhosted.org/packages/ce/87/0eaf2d03aef642578570b07e5d40a81f845a1072721e03035cb1f6c0caaa/lumiview-0.1.0.dev5-cp310-abi3-win32.whl", hash = "sha256:2db2043ffd31b9bb890150a20985b82e201e7c09480c33df92a44d59c0ff3d88", size = 600698, upload-time = "2026-08-07T08:06:31.155Z" },
-    { url = "https://files.pythonhosted.org/packages/15/e7/1411bb52f7a9199f42851be9c13328e784c94df04e6deeccdfbf12b63c9b/lumiview-0.1.0.dev5-cp310-abi3-win_amd64.whl", hash = "sha256:1c61e7941ffeaa3556b79b70de651a3be21df79d73bd298517e75c5844c2fa50", size = 650790, upload-time = "2026-08-07T08:06:32.668Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/47/a57aa81732ed2576472c871acc53ed847f3ae429097c23bccf6593e1ffdf/lumiview-0.1.2-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1aa66d00ba14cb3818f14d7c9ec62e210c60b65ef9444c238f3f163773614e0c", size = 907645, upload-time = "2026-08-29T12:16:28.864Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/2e/9098757a4991c5506e3fd925e7bb85731aa3e46bd60a72f90c2d131de2d4/lumiview-0.1.2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:11a680e68f958a43454265baf8b2437428e16df9d97ea0561042ec31eca8eb0c", size = 865860, upload-time = "2026-08-29T12:16:30.698Z" },
+    { url = "https://files.pythonhosted.org/packages/43/e7/da73a68e066706e31329a2ce47cfc35a2d4de2211f969ba541fe1200df62/lumiview-0.1.2-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:f0957a930805b0c75a82ff99df5da14cbe5a7e8ed50faee3f7a7a2ed2401a36b", size = 856953, upload-time = "2026-08-29T12:16:32.295Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/db/3309f61f3ecbb6af8953c0f7cc6dacc042a541aa0912dbf01577db98a996/lumiview-0.1.2-cp310-abi3-win32.whl", hash = "sha256:22a3e9747f19f0625f7cf7ef988c623adf318d9f34c759d65a77c13f93760bc1", size = 602003, upload-time = "2026-08-29T12:16:34.048Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/2a/2c16786586202b2b33245dc8c19ddce061019520af2ea330c88cfc5feca6/lumiview-0.1.2-cp310-abi3-win_amd64.whl", hash = "sha256:7474577b8b3f27cea84d7ac4867f16e46e5325d3595815ed497e82a9b3c38d49", size = 650783, upload-time = "2026-08-29T12:16:35.962Z" },
 ]
 
 [[package]]
@@ -400,7 +400,7 @@ wheels = [
 
 [[package]]
 name = "neony"
-version = "0.3.1"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "imageio-ffmpeg" },
@@ -408,9 +408,9 @@ dependencies = [
     { name = "pyclip" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/06/13/3ed5b98cb90e4629b6c89db921bc691567b14e7e95cd28102b2e4b8fdae7/neony-0.3.1.tar.gz", hash = "sha256:a8d6566e8261bf73f50e1b48f4609e05f6324ec8eaece120145211de4e33bb59", size = 783744, upload-time = "2026-08-27T06:24:06.173Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/c8/610045c6f5b6d1c9218c037846e38c54693aeb7754a071f08d0cceba330c/neony-0.4.0.tar.gz", hash = "sha256:ce51475055c5bc36293dd57c78d0bf8ab12892c0e779c277d17b128d6e59ae35", size = 915527, upload-time = "2026-10-02T10:32:50.961Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/43/e1/62a2bf96277c725ed2315961a06bf8c1d060c7344205a08738e3402c21ec/neony-0.3.1-py3-none-any.whl", hash = "sha256:fb3a78071bd736ea03a6934117eb858f332dfbb5fb4bb3867e52b47104ada35f", size = 721710, upload-time = "2026-08-27T06:24:04.484Z" },
+    { url = "https://files.pythonhosted.org/packages/41/fb/3c5e268f57817228e478ae410b550971618608b9cc5389004b2cf8a9eb3d/neony-0.4.0-py3-none-any.whl", hash = "sha256:4f75639e7ebc0225df24081357d79e5a8778d8b88af2bcbbc7ef7eb1eca3c186", size = 876744, upload-time = "2026-10-02T10:32:49.123Z" },
 ]
 
 [[package]]

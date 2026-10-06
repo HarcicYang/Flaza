@@ -13,15 +13,17 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from neony.application import icons
-from neony.application.elements import Button, ImageSegment, Menu, RichText, TextSegment
+from neony.application.elements import Button, ImageSegment, Menu, Popover, RichText, TextSegment
 from neony.application.elements.rich_text import RichSegment
 from neony.application.theme import stub
 from neony.dom import Button as _ButtonElem
-from neony.dom import Color, Div, DOMElement, DomEvent, Span, Styles
+from neony.dom import Color, Div, DOMElement, DomEvent, Img, Span, Styles
+from neony.dom.reactive import effect
 
-from flaza.core.models import GroupMember, StoredMessage, quote_preview_text
+from flaza.core.models import GroupMember, MarketFaceElement, StoredMessage, quote_preview_text
 from flaza.ui.actions import UiActions
 from flaza.ui.components.member_picker import MemberPicker
+from flaza.ui.state import UiStateStore
 
 ErrorHandler = Callable[[str], Awaitable[None]]
 
@@ -40,6 +42,29 @@ _ICON_BUTTON = Styles(
     cursor="pointer",
     flex_shrink="0",
 )
+
+_EMOJI_GRID = Styles(
+    display="flex",
+    flex_wrap="wrap",
+    gap="6px",
+    width="240px",
+    max_height="220px",
+    overflow_y="auto",
+)
+
+_EMOJI_CELL = Styles(
+    display="flex",
+    align_items="center",
+    justify_content="center",
+    width="40px",
+    height="40px",
+    padding="4px",
+    border_radius="8px",
+    cursor="pointer",
+    background_color=Color(name="transparent"),
+)
+
+_EMOJI_IMG = Styles(width="32px", height="32px", object_fit="contain", display="block")
 
 _SEND_BUTTON = _ICON_BUTTON.model_copy(
     update={
@@ -107,10 +132,12 @@ class Composer:
         actions: UiActions,
         render: Callable[[], Awaitable[None]],
         on_error: ErrorHandler | None = None,
+        state: UiStateStore | None = None,
     ) -> None:
         self._actions = actions
         self._render = render
         self._on_error = on_error
+        self._state = state
         # 编辑器里展示的是 data URL 缩略图；发送时要还原为本地路径。
         self._image_paths: dict[str, str] = {}
         # 会话草稿：切换会话时保存/恢复输入内容，避免误发到其他会话。
@@ -141,6 +168,17 @@ class Composer:
         self._plus_menu = Menu(("image", "插入图片"), ("text", "新增文字"), ("file", "发送文件"))
         self._plus_menu.on_change(self._on_plus_menu_change)
 
+        self._emoji_button = Button("", variant="ghost", icon=icons.mood).reset_styles(_ICON_BUTTON)
+        self._emoji_button.on_click(self._on_emoji_click)
+        self._emoji_grid = Div(styles=_EMOJI_GRID, container=[])
+        self._emoji_popover: Popover | None = None
+        if state is not None:
+            self._emoji_popover = Popover(self._emoji_button, self._emoji_grid, placement="top", align="start")
+            emoji_root = self._emoji_popover.build()
+            effect(self._rebuild_emoji_grid)
+        else:
+            emoji_root = self._emoji_button.build()
+
         self._send_button.on_click(self._on_send)
         self._plus_button.on_click(self._on_plus_click)
 
@@ -151,6 +189,7 @@ class Composer:
                     styles=Styles(display="flex", align_items="center", gap="8px"),
                     container=[
                         self._plus_button.build(),
+                        emoji_root,
                         self._editor.build(),
                         self._send_button.build(),
                     ],
@@ -461,6 +500,41 @@ class Composer:
         if at_pos < 0 or at_pos >= len(full_text):
             return ""
         return full_text[at_pos + 1 : caret]
+
+    def _rebuild_emoji_grid(self) -> None:
+        """按最近表情信号重建表情网格。"""
+        if self._state is None:
+            return
+        faces = self._state.recent_market_faces()
+        if not faces:
+            self._emoji_grid.container = [
+                Span(container=["暂无最近表情"], styles=Styles(font_size="12px", color=stub.text_secondary))
+            ]
+            return
+        cells: list[DOMElement | str] = []
+        for face in faces:
+            cell = Div(styles=_EMOJI_CELL, container=[Img(src=face.url, styles=_EMOJI_IMG)])
+            cell.bubble_events = True
+            cell.on_click(self._make_emoji_handler(face))
+            cells.append(cell)
+        self._emoji_grid.container = cells
+
+    async def _on_emoji_click(self, _event: DomEvent | None = None) -> None:
+        """点击表情按钮开合最近表情面板。"""
+        if self._emoji_popover is not None:
+            self._emoji_popover.open = not self._emoji_popover.open
+
+    def _make_emoji_handler(self, face: MarketFaceElement):
+        async def handler(_event: DomEvent) -> None:
+            if self._emoji_popover is not None:
+                self._emoji_popover.open = False
+            try:
+                await self._actions.send_element_to_active(face)
+            except Exception:
+                if self._on_error is not None:
+                    await self._on_error("表情发送失败")
+
+        return handler
 
     def _show_picker(self) -> None:
         """在编辑器上方显示成员选择器（absolute 定位，相对父容器）。"""

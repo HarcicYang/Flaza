@@ -6,10 +6,141 @@ import json
 from pathlib import Path
 
 from flaza.core.events import GroupReactionChanged, MessageMediaCached, MessageRecalled, MessageReceived
-from flaza.core.models import FriendChat, GroupChat, ImageElement, Message, StoredMessage, TextElement
+from flaza.core.models import (
+    FriendChat,
+    GroupChat,
+    ImageElement,
+    MarketFaceElement,
+    Message,
+    PendingRequest,
+    RequestKind,
+    StoredMessage,
+    TextElement,
+)
 from flaza.core.storage import Storage
 from flaza.core.storage.codec import encode_message
+from flaza.ui.components.message_list import MessageList
 from flaza.ui.state import CHAT_MESSAGE_PAGE_SIZE, UiStateStore
+
+
+def test_request_center_merges_dedupes_and_resolves() -> None:
+    state = UiStateStore(Storage())
+    placeholder = PendingRequest(
+        key="group-join:1:u_1",
+        kind=RequestKind.GROUP_JOIN,
+        title="有新的入群申请",
+        timestamp=1,
+    )
+    full = PendingRequest(
+        key="group-join:1:u_1",
+        kind=RequestKind.GROUP_JOIN,
+        title="小明 申请加入“测试群”",
+        group_id=1,
+        seq=5,
+        event_type=1,
+        timestamp=2,
+    )
+    friend = PendingRequest(
+        key="friend:u_2",
+        kind=RequestKind.FRIEND,
+        title="u_2 请求添加你为好友",
+        target_uid="u_2",
+        timestamp=3,
+    )
+
+    state.upsert_request(placeholder)
+    state.merge_requests([full, friend])
+
+    assert [item.key for item in state.requests()] == ["group-join:1:u_1", "friend:u_2"]
+    assert state.requests()[0].seq == 5
+    assert state.requests()[0].can_respond is True
+
+    state.resolve_request("group-join:1:u_1")
+
+    assert [item.key for item in state.requests()] == ["friend:u_2"]
+
+
+def test_message_selection_toggle_and_clear() -> None:
+    state = UiStateStore(Storage())
+    first = StoredMessage(
+        id=1,
+        message=Message(
+            chat=FriendChat(uid="u_1", uin=10001),
+            sender_uin=10001,
+            sender_uid="u_1",
+            seq=1,
+            timestamp=1,
+            elements=[TextElement(text="一")],
+        ),
+    )
+    second = StoredMessage(
+        id=2,
+        message=Message(
+            chat=FriendChat(uid="u_1", uin=10001),
+            sender_uin=10001,
+            sender_uid="u_1",
+            seq=2,
+            timestamp=2,
+            elements=[TextElement(text="二")],
+        ),
+    )
+
+    state.toggle_message_selection(first)
+    state.toggle_message_selection(second)
+    assert [item.id for item in state.selected_messages()] == [1, 2]
+
+    state.toggle_message_selection(first)
+    assert [item.id for item in state.selected_messages()] == [2]
+
+    state.clear_message_selection()
+    assert state.selected_messages() == ()
+
+
+def test_message_list_applies_selection_highlight() -> None:
+    state = UiStateStore(Storage())
+    message_list = MessageList(state)
+    chat = FriendChat(uid="u_1", uin=10001)
+    stored = StoredMessage(
+        id=1,
+        message=Message(
+            chat=chat,
+            sender_uin=10001,
+            sender_uid="u_1",
+            seq=1,
+            timestamp=1,
+            elements=[TextElement(text="你好")],
+        ),
+    )
+    message_list.set_messages(chat, (stored,))
+
+    state.toggle_message_selection(stored)
+    message_list.apply_selection()
+
+    assert message_list._items["message:1"].element.styles.box_shadow == "0 0 0 2px var(--color-accent)"
+
+
+def test_recent_market_faces_dedupe_and_persist(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        cache = tmp_path / "emoji_cache.json"
+        state = UiStateStore(Storage(), emoji_cache_path=cache)
+        face = MarketFaceElement(name="表情", face_id=b"aabb", tab_id=2, width=120, height=120)
+        duplicate = MarketFaceElement(name="同名新表情", face_id=b"aabb", tab_id=2, width=120, height=120)
+
+        state.remember_market_face(face)
+        state.remember_market_face(duplicate)
+        await state.persist_emoji_cache()
+
+        loaded = UiStateStore(Storage(), emoji_cache_path=cache)
+        await loaded.load_emoji_cache()
+
+        assert len(state.recent_market_faces()) == 1
+        assert state.recent_market_faces()[0].name == "同名新表情"
+        assert [item.face_id for item in loaded.recent_market_faces()] == [b"aabb"]
+        if state._emoji_save_task is not None:
+            state._emoji_save_task.cancel()
+            await asyncio.gather(state._emoji_save_task, return_exceptions=True)
+
+    asyncio.run(scenario())
 
 
 def test_active_chat_marks_incoming_message_read(tmp_path: Path) -> None:

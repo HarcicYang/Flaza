@@ -10,10 +10,12 @@ from neony.dom import Audio as DomAudio
 from flaza.core.models import (
     AtElement,
     AudioElement,
+    CardElement,
     FileElement,
     FriendChat,
     GroupChat,
     ImageElement,
+    MarkdownElement,
     MarketFaceElement,
     Message,
     MessageReaction,
@@ -58,6 +60,19 @@ def test_content_children_are_all_elements() -> None:
     assert root.container
     assert all(isinstance(child, DOMElement) for child in root.container)
     assert all(isinstance(child, DOMElement) for child in _walk(root))
+
+
+def test_card_and_markdown_elements_render_as_structured_content() -> None:
+    card = build_message_content(
+        _message(CardElement(title="标题", description="摘要", source="来源", url="https://example.com"))
+    )
+    markdown = build_message_content(_message(MarkdownElement(text="# 标题\n正文")))
+
+    card_text = "".join(str(child.container) for child in _walk(card))
+
+    assert "标题" in card_text
+    assert "摘要" in card_text
+    assert isinstance(markdown, DOMElement)
 
 
 def test_text_and_at_preserve_newlines() -> None:

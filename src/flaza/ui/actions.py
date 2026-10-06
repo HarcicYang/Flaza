@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
 import sys
+import webbrowser
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,9 +15,11 @@ from typing import TYPE_CHECKING
 import httpx
 
 from flaza.config import AppConfig, ChatOpenPosition, LoginConfig, ThemeName, save_config
+from flaza.core.events import GroupNameChanged
 from flaza.core.models import (
     AtAllElement,
     AtElement,
+    AudioElement,
     ChatTarget,
     FileElement,
     FriendChat,
@@ -23,10 +27,15 @@ from flaza.core.models import (
     GroupMember,
     ImageElement,
     LoginPhase,
+    Message,
     MessageElement,
+    PendingRequest,
     QuoteElement,
+    RequestKind,
     StoredMessage,
     TextElement,
+    UserProfile,
+    VideoElement,
     quote_preview_text,
 )
 from flaza.plugins.host import PluginSnapshot
@@ -73,9 +82,157 @@ class UiActions:
             raise RuntimeError("QQ 尚未启动，无法发送表情回应")
         await qq.send_reaction(chat, seq, emoji_id, emoji_type=emoji_type, is_cancel=is_cancel)
 
+    async def send_nudge(self, target: ChatTarget, uin: int) -> None:
+        """向好友或群成员发送戳一戳。"""
+        qq = self._runtime.qq
+        if qq is None:
+            raise RuntimeError("QQ 尚未启动，无法发送戳一戳")
+        await qq.send_nudge(target, uin)
+
+    async def refresh_requests(self) -> None:
+        """拉取服务端的待处理入群申请与邀请，合并进通知中心。"""
+        qq = self._runtime.qq
+        if qq is None:
+            return
+        try:
+            requests = await qq.fetch_group_requests()
+        except Exception:
+            logger.exception("拉取群申请失败")
+            return
+        self._runtime.state.merge_requests(requests)
+
+    async def respond_request(self, request: PendingRequest, accept: bool) -> None:
+        """同意或拒绝一条好友申请/入群申请/群邀请。"""
+        qq = self._runtime.qq
+        if qq is None:
+            raise RuntimeError("QQ 尚未启动，无法处理申请")
+        if request.kind is RequestKind.FRIEND:
+            if not request.target_uid:
+                raise RuntimeError("好友申请缺少 uid")
+            await qq.respond_friend_request(request.target_uid, accept)
+        else:
+            if not request.can_respond:
+                raise RuntimeError("申请参数不完整，请刷新后重试")
+            await qq.respond_group_request(request.group_id, request.seq, request.event_type, accept)
+        self._runtime.state.resolve_request(request.key)
+
+    async def fetch_user_profile(self, uid: str = "", uin: int = 0) -> UserProfile:
+        """拉取好友或群成员资料卡。"""
+        qq = self._runtime.qq
+        if qq is None:
+            raise RuntimeError("QQ 尚未启动，无法获取资料")
+        return await qq.fetch_user_profile(uid, uin)
+
+    async def like_friend(self, uid: str) -> int:
+        """给好友名片点赞。"""
+        qq = self._runtime.qq
+        if qq is None:
+            raise RuntimeError("QQ 尚未启动，无法点赞")
+        return await qq.like_friend(uid)
+
+    async def update_self_profile(self, nickname: str, bio: str) -> None:
+        """修改当前账号昵称与个性签名，并同步本地投影。"""
+        qq = self._require_qq()
+        nickname = nickname.strip()
+        bio = bio.strip()
+        if nickname:
+            await qq.set_self_nickname(nickname)
+        await qq.set_self_bio(bio)
+        info = self._runtime.state.self_info()
+        if info is not None and nickname:
+            self._runtime.state.self_info.set(info.model_copy(update={"nickname": nickname}))
+
+    async def pick_avatar_file(self) -> str | None:
+        """打开系统文件选择器选择头像图片。"""
+        paths = await self._runtime.open_files(
+            title="选择头像",
+            filetypes=[("图片", "*.png *.jpg *.jpeg *.gif *.webp *.bmp")],
+        )
+        return paths[0] if paths else None
+
+    async def update_self_avatar(self, path: str) -> None:
+        """上传并修改当前账号头像。"""
+        await self._require_qq().set_self_avatar(path)
+
     async def list_group_members(self, group_id: int) -> list[GroupMember]:
         """读取本地群成员缓存，供 @ 提及等 UI 使用。"""
         return await self._runtime.storage.members.list_by_group(group_id)
+
+    def _require_qq(self):
+        qq = self._runtime.qq
+        if qq is None:
+            raise RuntimeError("QQ 尚未启动")
+        return qq
+
+    # ---- 群管理 ----
+
+    async def rename_group(self, group_id: int, name: str) -> None:
+        """修改群名，并立即把新名称投影到本地状态。"""
+        await self._require_qq().rename_group(group_id, name)
+        info = self._runtime.state.self_info()
+        self._runtime.bus.publish(
+            GroupNameChanged(
+                group_id=group_id,
+                name_new=name.strip(),
+                operator_uid=info.uid if info else "",
+            )
+        )
+
+    async def rename_group_member(self, group_id: int, uid: str, name: str) -> None:
+        await self._require_qq().rename_group_member(group_id, uid, name)
+
+    async def kick_group_member(self, group_id: int, uin: int) -> None:
+        await self._require_qq().kick_group_member(group_id, uin)
+
+    async def set_group_admin(self, group_id: int, uid: str, is_set: bool) -> None:
+        await self._require_qq().set_group_admin(group_id, uid, is_set)
+
+    async def set_group_special_title(self, group_id: int, uid: str, title: str) -> None:
+        await self._require_qq().set_group_special_title(group_id, uid, title)
+
+    async def set_group_mute(self, group_id: int, enable: bool) -> None:
+        await self._require_qq().set_group_mute(group_id, enable)
+
+    async def mute_group_member(self, group_id: int, uin: int, duration: int) -> None:
+        await self._require_qq().mute_group_member(group_id, uin, duration)
+
+    async def leave_group(self, group_id: int) -> None:
+        await self._require_qq().leave_group(group_id)
+
+    async def invite_group_members(self, group_id: int, uids: list[str] | dict[str, int]) -> None:
+        await self._require_qq().invite_group_members(group_id, uids)
+
+    async def set_group_essence(self, group_id: int, seq: int, rand: int, is_remove: bool = False) -> None:
+        await self._require_qq().set_group_essence(group_id, seq, rand, is_remove)
+
+    async def fetch_forward_messages(self, chat: ChatTarget, resid: str) -> list[Message]:
+        """拉取合并转发内容。"""
+        return await self._require_qq().fetch_forward_messages(chat, resid)
+
+    async def forward_message(self, target: ChatTarget, message: Message) -> None:
+        """把一条消息作为合并转发卡片发送到目标会话。"""
+        await self._require_qq().forward_messages(target, [message])
+
+    async def forward_messages(self, target: ChatTarget, messages: list[Message]) -> None:
+        """把多条消息作为合并转发卡片发送到目标会话。"""
+        await self._require_qq().forward_messages(target, messages)
+
+    async def send_element(self, chat: ChatTarget, element: MessageElement) -> None:
+        """把单个消息元素（表情等）复读到当前会话。"""
+        await self._send_confirmed(chat, [element])
+
+    async def send_element_to_active(self, element: MessageElement) -> None:
+        """把单个消息元素发送到当前会话。"""
+        chat = self._runtime.state.active_chat()
+        if chat is None:
+            return
+        await self.send_element(chat, element)
+
+    async def open_external(self, url: str) -> None:
+        """用系统浏览器打开 http/https 链接。"""
+        if not url.startswith(("http://", "https://")):
+            return
+        await asyncio.to_thread(webbrowser.open, url)
 
     # ---- 登录 ----
 
@@ -154,7 +311,7 @@ class UiActions:
 
         if not elements:
             return
-        await self._send_with_pending_bubble(chat, elements)
+        await self._send_confirmed(chat, elements)
         await self._refresh_after_send_safely(chat, state)
 
     async def send_composed_blocks(self, blocks: Sequence[tuple[str, str]]) -> None:
@@ -170,7 +327,7 @@ class UiActions:
         elements = self._elements_from_blocks(blocks)
         if not elements:
             return
-        await self._send_with_pending_bubble(chat, elements)
+        await self._send_confirmed(chat, elements)
         await self._refresh_after_send_safely(chat, state)
 
     async def send_reply_message(self, reply_to: StoredMessage, blocks: Sequence[tuple[str, str]]) -> None:
@@ -193,7 +350,7 @@ class UiActions:
         elements = [quote, *self._elements_from_blocks(blocks)]
         if not elements:
             return
-        await self._send_with_pending_bubble(chat, elements)
+        await self._send_confirmed(chat, elements)
         await self._refresh_after_send_safely(chat, state)
 
     async def pick_images(self) -> list[str]:
@@ -225,7 +382,7 @@ class UiActions:
         for path in paths:
             if not _looks_like_image(path):
                 continue
-            await self._send_with_pending_bubble(chat, [ImageElement(local_path=path)])
+            await self._send_confirmed(chat, [ImageElement(local_path=path)])
             sent += 1
 
         if sent:
@@ -252,7 +409,7 @@ class UiActions:
 
         sent = 0
         for path in paths:
-            await self._send_with_pending_file(chat, path)
+            await self._send_file_confirmed(chat, path)
             sent += 1
 
         if sent:
@@ -263,8 +420,12 @@ class UiActions:
         """判断路径是否属于受支持的图片文件。"""
         return _looks_like_image(path)
 
-    async def _send_with_pending_bubble(self, chat: ChatTarget, elements: list[MessageElement]) -> None:
-        """先显示乐观气泡，再等待协议确认；失败时立即移除。"""
+    async def _send_confirmed(self, chat: ChatTarget, elements: list[MessageElement]) -> None:
+        """立即显示与成功态一致的乐观气泡，随后等待协议确认。
+
+        成功后由 ``MessageSent`` 处理器在同一帧移除乐观气泡并投影真实消息，
+        确认前后外观完全一致；失败时立即撤回气泡。
+        """
         state = self._runtime.state
         pending = state.begin_outgoing_message(chat, elements)
         try:
@@ -272,12 +433,11 @@ class UiActions:
         except Exception:
             state.remove_pending_message(pending)
             raise
-        state.remove_pending_message(pending)
 
-    async def _send_with_pending_file(self, chat: ChatTarget, path: str) -> None:
-        """乐观发送本地文件，文件名用于未完成阶段的可读展示。"""
-        element = FileElement(file_name=Path(path).name)
-        await self._send_with_pending_bubble(chat, [element])
+    async def _send_file_confirmed(self, chat: ChatTarget, path: str) -> None:
+        """等待协议确认后写入本地文件消息。"""
+        element = _outgoing_file_element(path)
+        await self._send_confirmed(chat, [element])
 
     @staticmethod
     def _elements_from_blocks(blocks: Sequence[tuple[str, str]]) -> list[MessageElement]:
@@ -516,8 +676,21 @@ async def _download_to_path(client: httpx.AsyncClient, url: str, destination: st
 
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+_VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
+_AUDIO_SUFFIXES = {".amr", ".silk", ".mp3", ".m4a", ".wav", ".ogg"}
 
 
 def _looks_like_image(path: str) -> bool:
     """按扩展名判断文件是否为受支持的图片。"""
     return Path(path).suffix.lower() in _IMAGE_SUFFIXES
+
+
+def _outgoing_file_element(path: str) -> MessageElement:
+    """按扩展名把本地文件映射为语音、视频或普通文件元素。"""
+    name = Path(path).name
+    suffix = Path(path).suffix.lower()
+    if suffix in _AUDIO_SUFFIXES:
+        return AudioElement(local_path=path, name=name)
+    if suffix in _VIDEO_SUFFIXES:
+        return VideoElement(local_path=path, name=name)
+    return FileElement(file_name=name)

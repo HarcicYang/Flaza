@@ -20,6 +20,8 @@ from flaza.core.models import (
     GroupMember,
     LoginPhase,
     Message,
+    OnlineClient,
+    PendingRequest,
     QrCodeData,
     SelfInfo,
 )
@@ -84,6 +86,58 @@ class MessageRecalled(FlazaEvent):
     seq: int
     timestamp: int = 0
     operator_uid: str = ""
+
+
+class FriendPoked(FlazaEvent):
+    """好友戳一戳。"""
+
+    sender_uin: int
+    sender_uid: str = ""
+    target_uin: int = 0
+    action: str = ""
+    suffix: str = ""
+    timestamp: int = 0
+
+
+class GroupNudged(FlazaEvent):
+    """群内戳一戳。"""
+
+    group_id: int
+    sender_uin: int
+    target_uin: int = 0
+    action: str = ""
+    suffix: str = ""
+
+
+class GroupNotice(FlazaEvent):
+    """群内其它值得展示为灰条的事件。"""
+
+    group_id: int
+    text: str
+    timestamp: int = 0
+    key: str = ""
+    kind: str = ""
+
+
+class RequestReceived(FlazaEvent):
+    """收到好友申请、入群申请或群邀请。"""
+
+    request: PendingRequest
+
+
+class RequestResolved(FlazaEvent):
+    """申请/邀请被处理或状态变化，通知中心据此移除条目。"""
+
+    key: str
+    accepted: bool = True
+    detail: str = ""
+    refresh_contacts: bool = False
+
+
+class OtherClientsUpdated(FlazaEvent):
+    """同一账号的其它在线端发生变化。"""
+
+    clients: list[OnlineClient]
 
 
 class GroupNameChanged(FlazaEvent):

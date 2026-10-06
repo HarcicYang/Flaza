@@ -3,7 +3,7 @@
 import asyncio
 
 import pytest
-from neony.dom import DOMElement, DomEvent, Span
+from neony.dom import Animation, DOMElement, DomEvent, Span
 
 from flaza.config import AppConfig
 from flaza.core.models import (
@@ -542,38 +542,6 @@ def test_message_list_renders_plugin_quick_action_and_routes_value() -> None:
     asyncio.run(scenario())
 
 
-def test_pending_message_appends_then_removes_only_its_bubble() -> None:
-    async def scenario() -> None:
-        _runtime, state = _runtime_state()
-        chat = FriendChat(uid="u_1", uin=10001)
-        state.self_info.set(SelfInfo(uin=10001, uid="u_self", nickname="我"))
-
-        old = (_message(chat, 1, "一", 1), _message(chat, 2, "二", 2))
-        messages = MessageList(state)
-        messages.set_messages(chat, old)
-        existing_elements = list(messages.root.container)
-
-        pending = state.begin_outgoing_message(chat, [TextElement(text="正在发送")])
-        messages.set_messages(chat, old, (), (pending,))
-
-        assert len(messages.root.container) == 3
-        assert messages.root.container[:2] == existing_elements
-        entry = messages._items[f"message:{pending.id}"]
-        assert entry.kind == "message"
-        assert entry.bubble is not None
-        assert entry.message is not None
-        assert entry.message.from_self is True
-        content = entry.bubble.content
-        assert content is not None
-        assert len(content.container) == 2
-
-        messages.set_messages(chat, old, (), ())
-        assert list(messages.root.container) == existing_elements
-        assert f"message:{pending.id}" not in messages._items
-
-    asyncio.run(scenario())
-
-
 def _reaction_picker():
     from flaza.ui.components.reaction_picker import ReactionPicker
 
@@ -581,3 +549,80 @@ def _reaction_picker():
         return None
 
     return ReactionPicker(on_select=on_select)
+
+
+def test_message_entry_animation_depends_on_side_and_state() -> None:
+    chat = FriendChat(uid="u_1", uin=10001)
+    incoming = Message(chat=chat, sender_uin=10001, sender_uid="u_1", seq=1, timestamp=1, elements=[])
+    outgoing = incoming.model_copy(update={"from_self": True})
+
+    incoming_animation = MessageList._entry_animation("message:1", "message", incoming)
+    pending_animation = MessageList._entry_animation("message:-1", "message", outgoing)
+    confirmed_animation = MessageList._entry_animation("message:1", "message", outgoing)
+    notice_animation = MessageList._entry_animation("notice:1", "notice", None)
+
+    assert incoming_animation is not None and incoming_animation.name == "flaza-msg-in"
+    assert pending_animation is not None and pending_animation.name == "flaza-msg-out"
+    assert confirmed_animation is None
+    assert notice_animation is not None and notice_animation.name == "flaza-notice-in"
+    assert MessageList._entry_animation("message:1", "message", None) is None
+
+
+def test_optimistic_bubble_is_replaced_in_place_without_second_animation() -> None:
+    async def scenario() -> None:
+        _runtime, state = _runtime_state()
+        chat = FriendChat(uid="u_1", uin=10001)
+        state.self_info.set(SelfInfo(uin=10001, uid="u_self", nickname="我"))
+        messages = MessageList(state)
+        old = (_message(chat, 1, "一", 1),)
+        messages.set_messages(chat, old)
+
+        pending = state.begin_outgoing_message(chat, [TextElement(text="你好")])
+        messages.set_messages(chat, old, (), (pending,))
+        pending_key = f"message:{pending.id}"
+        assert pending_key in messages._items
+
+        confirmed = StoredMessage(
+            id=5,
+            message=Message(
+                chat=chat,
+                sender_uin=10001,
+                sender_uid="u_self",
+                sender_name="我",
+                seq=5,
+                timestamp=2,
+                elements=[TextElement(text="你好")],
+                from_self=True,
+            ),
+        )
+        state.remove_pending_message(pending)
+        messages.set_messages(chat, (*old, confirmed), (), ())
+
+        assert len(messages.root.container) == 2
+        assert pending_key not in messages._items
+        entry = messages._items["message:5"]
+        assert entry.element.styles.animation is None
+
+    asyncio.run(scenario())
+
+
+def test_apply_selection_preserves_entry_animation() -> None:
+    _runtime, state = _runtime_state()
+    messages = MessageList(state)
+    chat = FriendChat(uid="u_1", uin=10001)
+    first = StoredMessage(
+        id=1,
+        message=Message(chat=chat, sender_uin=10001, sender_uid="u_1", seq=1, timestamp=1, elements=[]),
+    )
+    second = StoredMessage(
+        id=2,
+        message=Message(chat=chat, sender_uin=10001, sender_uid="u_1", seq=2, timestamp=2, elements=[]),
+    )
+    messages.set_messages(chat, (first,))
+    messages.set_messages(chat, (first, second))
+
+    messages.apply_selection()
+
+    animation = messages._items["message:2"].element.styles.animation
+    assert isinstance(animation, Animation)
+    assert animation.name == "flaza-msg-in"

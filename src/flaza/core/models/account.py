@@ -63,3 +63,36 @@ class SelfInfo(BaseModel):
     uin: int
     uid: str
     nickname: str = ""
+
+
+class UserProfile(BaseModel):
+    """好友或群成员的资料卡。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    uid: str = ""
+    uin: int = 0
+    nickname: str = ""
+    bio: str = ""
+    sex: str = "unknown"
+    age: int = 0
+    location: str = ""
+    qid: str = ""
+
+    @property
+    def display_name(self) -> str:
+        return self.nickname or self.qid or str(self.uin or self.uid)
+
+
+class OnlineClient(BaseModel):
+    """同一账号的其它在线端。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    sub_id: int = 0
+    os_name: str = ""
+    device_name: str = ""
+
+    @property
+    def display_name(self) -> str:
+        return self.device_name or self.os_name or "未知设备"

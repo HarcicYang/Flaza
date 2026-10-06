@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from neony.application.elements import Button
 from neony.application.theme import stub
-from neony.dom import Color, Div, DomEvent, Img, Styles
+from neony.dom import Animation, Color, Div, DomEvent, Img, Styles
 
 _MIN_SCALE = 0.25
 _MAX_SCALE = 5.0
@@ -84,6 +85,14 @@ _IMAGE_ACTUAL = Styles(
     border_radius="8px",
     transition="transform 0.12s ease",
 )
+
+_OVERLAY_IN = _OVERLAY.model_copy(
+    update={"animation": Animation(name="flaza-viewer-in", duration="0.18s", timing="ease-out")}
+)
+_OVERLAY_OUT = _OVERLAY.model_copy(
+    update={"animation": Animation(name="flaza-viewer-out", duration="0.14s", timing="ease-in")}
+)
+_IMAGE_IN = Animation(name="flaza-image-in", duration="0.2s", timing="ease-out")
 
 
 @dataclass(frozen=True)
@@ -164,14 +173,20 @@ class ImageViewer:
         self._stage.styles = _STAGE
         self._update_stage_cursor()
         self._sync_image_styles()
-        self.root.styles = _OVERLAY
+        self._image.styles = self._image.styles.model_copy(update={"animation": _IMAGE_IN})
+        self.root.styles = _OVERLAY_IN
         await self._render()
 
     async def close(self) -> None:
+        if not self._is_open:
+            return
         self._is_open = False
         self._dragging = False
         self._anchor_x = None
         self._anchor_y = None
+        self.root.styles = _OVERLAY_OUT
+        await self._render()
+        await asyncio.sleep(0.14)
         self.root.styles = _OVERLAY.model_copy(update={"display": "none"})
         await self._render()
 

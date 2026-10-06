@@ -17,6 +17,7 @@ from flaza.core.models import (
     ImageElement,
     Message,
     MessageElement,
+    PendingRequest,
     QrCodeData,
     QrCodeState,
     SelfInfo,
@@ -34,6 +35,7 @@ class FakeQQ:
 
     def __init__(self) -> None:
         self.missing_by_chat: dict[str, list[Message]] = {}
+        self.refreshed_by_seq: dict[tuple[str, int], Message] = {}
         self.calls: list[tuple[ChatTarget, int, int]] = []
         self.sent_elements: list[Sequence[MessageElement]] = []
         self.sent_files: list[tuple[str, str | None]] = []
@@ -107,9 +109,75 @@ class FakeQQ:
     ) -> None:
         self.reactions.append((chat, seq, emoji_id, emoji_type, is_cancel))
 
+    async def send_nudge(self, target: ChatTarget, uin: int) -> None:
+        raise NotImplementedError
+
+    async def respond_friend_request(self, uid: str, accept: bool) -> None:
+        raise NotImplementedError
+
+    async def fetch_group_requests(self) -> list[PendingRequest]:
+        raise NotImplementedError
+
+    async def respond_group_request(self, group_id: int, seq: int, event_type: int, accept: bool) -> None:
+        raise NotImplementedError
+
+    async def fetch_user_profile(self, uid: str = "", uin: int = 0):
+        raise NotImplementedError
+
+    async def like_friend(self, uid: str) -> int:
+        raise NotImplementedError
+
+    async def set_self_nickname(self, nickname: str) -> None:
+        raise NotImplementedError
+
+    async def set_self_bio(self, bio: str) -> None:
+        raise NotImplementedError
+
+    async def set_self_avatar(self, path: str) -> None:
+        raise NotImplementedError
+
+    async def rename_group(self, group_id: int, name: str) -> None:
+        raise NotImplementedError
+
+    async def rename_group_member(self, group_id: int, uid: str, name: str) -> None:
+        raise NotImplementedError
+
+    async def kick_group_member(self, group_id: int, uin: int) -> None:
+        raise NotImplementedError
+
+    async def set_group_admin(self, group_id: int, uid: str, is_set: bool) -> None:
+        raise NotImplementedError
+
+    async def set_group_special_title(self, group_id: int, uid: str, title: str) -> None:
+        raise NotImplementedError
+
+    async def set_group_mute(self, group_id: int, enable: bool) -> None:
+        raise NotImplementedError
+
+    async def mute_group_member(self, group_id: int, uin: int, duration: int) -> None:
+        raise NotImplementedError
+
+    async def leave_group(self, group_id: int) -> None:
+        raise NotImplementedError
+
+    async def invite_group_members(self, group_id: int, uids: list[str] | dict[str, int]) -> None:
+        raise NotImplementedError
+
+    async def set_group_essence(self, group_id: int, seq: int, rand: int, is_remove: bool = False) -> None:
+        raise NotImplementedError
+
+    async def fetch_forward_messages(self, chat: ChatTarget, resid: str) -> list[Message]:
+        raise NotImplementedError
+
+    async def forward_messages(self, target: ChatTarget, messages: list[Message]) -> None:
+        raise NotImplementedError
+
     async def fetch_missing_messages(self, chat: ChatTarget, after_seq: int, limit: int = 500) -> list[Message]:
         self.calls.append((chat, after_seq, limit))
         return self.missing_by_chat.get(chat.key, [])
+
+    async def fetch_message(self, chat: ChatTarget, seq: int) -> Message | None:
+        return self.refreshed_by_seq.get((chat.key, seq))
 
 
 class FakeMediaCache(MediaCache):
@@ -454,6 +522,51 @@ def test_sync_offline_messages_includes_contacts_without_sessions(tmp_path: Path
         assert {call[0].key for call in qq.calls} == {friend_chat.key, group_chat.key}
         assert all(call[1] == 0 and call[2] == 50 for call in qq.calls)
         assert await storage.sessions.list_recent()
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_repair_legacy_images_refreshes_dead_gchatpic(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = Storage()
+        await storage.init(tmp_path / "flaza.db")
+        chat = GroupChat(group_id=20001)
+        legacy = Message(
+            chat=chat,
+            sender_uin=10001,
+            sender_uid="u_1",
+            seq=5,
+            timestamp=1,
+            elements=[
+                ImageElement(
+                    url="https://gchat.qpic.cn/gchatpic_new/1/2-3-ABC/0?term=255",
+                    md5=b"m",
+                    size=1,
+                )
+            ],
+        )
+        await storage.messages.insert(legacy)
+        qq = FakeQQ()
+        qq.refreshed_by_seq[(chat.key, 5)] = legacy.model_copy(
+            update={
+                "elements": [
+                    ImageElement(
+                        url="https://multimedia.nt.qq.com.cn/download?fileid=x&rkey=y",
+                        md5=b"m",
+                        size=1,
+                    )
+                ]
+            }
+        )
+        service = MessageService(qq, storage, EventBus())
+
+        assert await service.repair_legacy_images() == 1
+
+        stored = await storage.messages.list_recent(chat)
+        element = stored[0].message.elements[0]
+        assert isinstance(element, ImageElement)
+        assert "multimedia.nt.qq.com.cn" in element.url
         await storage.close()
 
     asyncio.run(scenario())

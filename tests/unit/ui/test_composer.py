@@ -32,6 +32,22 @@ def test_data_url_to_tempfile_persists_bytes() -> None:
         assert file.read().startswith(b"\x89PNG")
 
 
+def test_emoji_button_toggles_recent_face_popover() -> None:
+    async def scenario() -> None:
+        runtime = ApplicationRuntime(AppConfig())
+        composer = Composer(runtime.actions, lambda: asyncio.sleep(0), state=runtime.state)
+        assert composer._emoji_popover is not None
+        assert composer._emoji_popover.open is False
+
+        await composer._on_emoji_click()
+        assert composer._emoji_popover.open is True
+
+        await composer._on_emoji_click()
+        assert composer._emoji_popover.open is False
+
+    asyncio.run(scenario())
+
+
 def test_composer_stages_images_inside_editor(tmp_path: Path) -> None:
     image = tmp_path / "pic.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\n")

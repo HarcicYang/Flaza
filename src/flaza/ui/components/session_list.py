@@ -9,7 +9,7 @@ from datetime import datetime
 
 from neony.application.elements import Avatar, Badge
 from neony.application.theme import stub
-from neony.dom import Color, Div, DOMElement, DomEvent, Span, Styles
+from neony.dom import Animation, Color, Div, DOMElement, DomEvent, Span, Styles
 
 from flaza.core.models import ChatTarget, Session
 from flaza.ui.actions import UiActions
@@ -171,6 +171,7 @@ class SessionList:
         if session.unread_count > 0:
             badge = Badge(session.unread_count, variant="accent")
             badge_el = badge.build()
+            badge_el.styles = badge_el.styles.model_copy(update={"animation": _badge_pop(session.unread_count)})
             preview_row.container.append(badge_el)
 
         active = session.chat.key == active_key
@@ -227,6 +228,10 @@ class SessionList:
                 row.preview_row.container.append(row.badge_el)
             elif row.badge.content != session.unread_count:
                 row.badge.content = session.unread_count
+                if row.badge_el is not None:
+                    row.badge_el.styles = row.badge_el.styles.model_copy(
+                        update={"animation": _badge_pop(session.unread_count)}
+                    )
         elif row.badge_el is not None:
             _remove_from_container(row.preview_row.container, row.badge_el)
             row.badge = None
@@ -279,6 +284,12 @@ def _remove_from_container(container: list[DOMElement | str], element: DOMElemen
     except StopIteration:
         return
     container.pop(index)
+
+
+def _badge_pop(count: int) -> Animation:
+    """计数变化时交替关键帧名，保证 CSS 动画能重新触发。"""
+    name = "flaza-badge-pop" if count % 2 == 0 else "flaza-badge-pop-alt"
+    return Animation(name=name, duration="0.24s", timing="ease-out")
 
 
 def _format_time(timestamp: int) -> str:

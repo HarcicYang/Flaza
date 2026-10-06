@@ -38,6 +38,25 @@ class GroupMemberRepository:
         )
         await self._db.commit()
 
+    async def upsert_many(self, members: list[GroupMember]) -> None:
+        """批量写入群成员，减少整群同步时的 commit 次数。"""
+        if not members:
+            return
+        now = int(time.time())
+        await self._db.executemany(
+            """
+            INSERT INTO group_members (group_id, uid, uin, nickname, role, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (group_id, uid) DO UPDATE SET
+                uin = excluded.uin,
+                nickname = excluded.nickname,
+                role = excluded.role,
+                updated_at = excluded.updated_at
+            """,
+            [(m.group_id, m.uid, m.uin, m.nickname, m.role.value, now) for m in members],
+        )
+        await self._db.commit()
+
     async def remove(self, group_id: int, uid: str) -> None:
         await self._db.execute("DELETE FROM group_members WHERE group_id = ? AND uid = ?", (group_id, uid))
         await self._db.commit()

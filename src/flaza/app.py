@@ -31,6 +31,41 @@ def register_page_keyframes(app: NeonApplication[UiStateStore]) -> None:
         .set("0%", Props(opacity=1.0, transform="translateY(0)"))
         .set("100%", Props(opacity=0.0, transform="translateY(-8px)"))
     )
+    app.register_keyframe(
+        KeyFrame("flaza-msg-in")
+        .set("0%", Props(opacity=0.0, transform="translate3d(0, 22px, 0)"))
+        .set("100%", Props(opacity=1.0, transform="translate3d(0, 0, 0)"))
+    )
+    app.register_keyframe(
+        KeyFrame("flaza-msg-out")
+        .set("0%", Props(opacity=0.0, transform="translate3d(0, 22px, 0)"))
+        .set("100%", Props(opacity=1.0, transform="translate3d(0, 0, 0)"))
+    )
+    app.register_keyframe(
+        KeyFrame("flaza-notice-in")
+        .set("0%", Props(opacity=0.0, transform="translateY(-6px)"))
+        .set("100%", Props(opacity=1.0, transform="translateY(0)"))
+    )
+    app.register_keyframe(
+        KeyFrame("flaza-badge-pop")
+        .set("0%", Props(opacity=0.0, transform="scale(0.4)"))
+        .set("70%", Props(opacity=1.0, transform="scale(1.15)"))
+        .set("100%", Props(opacity=1.0, transform="scale(1)"))
+    )
+    # 与 flaza-badge-pop 相同；计数变化时交替使用，强制重新触发动画。
+    app.register_keyframe(
+        KeyFrame("flaza-badge-pop-alt")
+        .set("0%", Props(opacity=0.0, transform="scale(0.4)"))
+        .set("70%", Props(opacity=1.0, transform="scale(1.15)"))
+        .set("100%", Props(opacity=1.0, transform="scale(1)"))
+    )
+    app.register_keyframe(KeyFrame("flaza-viewer-in").set("0%", Props(opacity=0.0)).set("100%", Props(opacity=1.0)))
+    app.register_keyframe(KeyFrame("flaza-viewer-out").set("0%", Props(opacity=1.0)).set("100%", Props(opacity=0.0)))
+    app.register_keyframe(
+        KeyFrame("flaza-image-in")
+        .set("0%", Props(opacity=0.0, transform="scale(0.94)"))
+        .set("100%", Props(opacity=1.0, transform="scale(1)"))
+    )
 
 
 def create_page(runtime: ApplicationRuntime) -> Page:

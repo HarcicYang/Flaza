@@ -41,6 +41,11 @@ class LoginConfig(BaseModel):
     signer_token: str = ""
     use_custom: bool = False
     appinfo_path: str = "./appinfo.json"
+    use_custom_sign_provider: bool = True
+    sign_provider_path: str = "../EulerOneBot/sign_provider.py"
+    sign_provider_entry: str = "sign_provider"
+    use_ipv6: bool = True
+    use_optimum: bool = True
 
 
 class PathsConfig(BaseModel):
@@ -50,8 +55,10 @@ class PathsConfig(BaseModel):
 
     device_info_path: str = "./device.json"
     sign_info_path: str = "./sig.bin"
+    login_info_source_dir: str = "../lagrange-python"
     media_cache_dir: str = "./media_cache"
     chat_cache_path: str = "./chat_cache.json"
+    emoji_cache_path: str = "./emoji_cache.json"
     plugins_dir: str = "./plugins"
     plugin_state_path: str = "./plugin_state.json"
 
@@ -84,6 +91,8 @@ class AppConfig(BaseModel):
         """是否具备启动登录所需的最小配置。"""
         if self.login.uin <= 0:
             return False
+        if self.login.use_custom_sign_provider and Path(self.login.sign_provider_path).is_file():
+            return True
         url = urlsplit(self.login.signer_url)
         return url.scheme in ("http", "https") and bool(url.hostname)
 
@@ -101,7 +110,21 @@ def load_config(path: str | Path = "appconfig.json") -> AppConfig:
     theme = data.get("window", {}).get("theme")
     if theme in _LEGACY_THEMES:
         data.setdefault("window", {})["theme"] = _LEGACY_THEMES[theme]
-    return AppConfig.model_validate(data)
+    config = AppConfig.model_validate(data)
+    login_data = data.get("login")
+    if isinstance(login_data, dict) and any(
+        key not in login_data
+        for key in (
+            "use_custom_sign_provider",
+            "sign_provider_path",
+            "sign_provider_entry",
+            "use_ipv6",
+            "use_optimum",
+        )
+    ):
+        # 老配置文件补全新签名项，保证 custom sign provider 在文件里可见可改。
+        save_config(config, config_path)
+    return config
 
 
 def save_config(config: AppConfig, path: str | Path = "appconfig.json") -> None:

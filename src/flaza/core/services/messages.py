@@ -31,6 +31,14 @@ from flaza.plugins.registry import PluginExtensionRegistry
 
 logger = logging.getLogger(__name__)
 
+_SYNC_CHAT_CONCURRENCY = 4
+_LEGACY_IMAGE_HOST = "gchat.qpic.cn"
+
+
+def _has_legacy_image(message: Message) -> bool:
+    """消息里是否还存在指向旧图床的图片地址。"""
+    return any(isinstance(element, ImageElement) and _LEGACY_IMAGE_HOST in element.url for element in message.elements)
+
 
 class MessageService:
     """消息用例的统一入口。"""
@@ -124,22 +132,69 @@ class MessageService:
             if chat.key not in targets:
                 targets[chat.key] = (chat, 0, initial_limit_per_chat)
 
-        total = 0
-        for chat, after_seq, limit in targets.values():
-            try:
+        semaphore = asyncio.Semaphore(_SYNC_CHAT_CONCURRENCY)
+
+        async def sync_chat(chat: ChatTarget, after_seq: int, limit: int) -> int:
+            async with semaphore:
                 messages = await self._qq.fetch_missing_messages(chat, after_seq, limit)
-            except Exception:
-                logger.exception("离线消息补拉失败: %s", chat.key)
-                continue
-            for message in messages:
-                await self._storage.messages.insert(message)
+            if not messages:
+                return 0
+            await self._storage.messages.insert_many(messages)
             self.schedule_media_cache(messages)
-            total += len(messages)
+            return len(messages)
+
+        pending = list(targets.values())
+        results = await asyncio.gather(
+            *(sync_chat(chat, after_seq, limit) for chat, after_seq, limit in pending),
+            return_exceptions=True,
+        )
+        total = 0
+        for (chat, _, _), result in zip(pending, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.warning("离线消息补拉失败: %s: %r", chat.key, result)
+                continue
+            total += result
 
         logger.info("离线消息补拉完成：共 %s 条", total)
         if total:
             self._bus.publish(MessagesSynced(total=total))
         return total
+
+    async def repair_legacy_images(self, max_messages: int = 20) -> int:
+        """把库中仍指向旧图床的图片消息按 seq 重新拉取并替换。
+
+        旧 gchatpic 地址可能已经失效；重新拉取会走解码补丁的现代图片元素，
+        换到带 rkey 的多媒体地址后重新安排媒体缓存。
+        """
+        repaired = 0
+        for session in await self._storage.sessions.list_recent():
+            if repaired >= max_messages:
+                break
+            recent = await self._storage.messages.list_recent(session.chat, limit=30)
+            for stored in recent:
+                if repaired >= max_messages:
+                    break
+                if not _has_legacy_image(stored.message):
+                    continue
+                refreshed = await self._repair_legacy_image_message(stored.message)
+                if refreshed is None:
+                    continue
+                repaired += 1
+                self.schedule_media_cache([refreshed])
+        if repaired:
+            logger.info("旧图床消息已刷新：%s 条", repaired)
+        return repaired
+
+    async def _repair_legacy_image_message(self, message: Message) -> Message | None:
+        try:
+            refreshed = await self._qq.fetch_message(message.chat, message.seq)
+        except Exception:
+            logger.debug("重新拉取媒体消息失败: chat=%s seq=%s", message.chat.key, message.seq, exc_info=True)
+            return None
+        if refreshed is None or _has_legacy_image(refreshed):
+            return None
+        updated = await self._storage.messages.replace_message(refreshed)
+        return updated.message if updated is not None else None
 
     def schedule_media_cache(self, messages: Sequence[Message]) -> None:
         """为消息中的媒体安排后台缓存任务，不阻塞消息展示。"""

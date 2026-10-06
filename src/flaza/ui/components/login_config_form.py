@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
-from neony.application.elements import Input, Radio, RadioGroup, Text, VStack
+from neony.application.elements import Input, Radio, RadioGroup, Switch, Text, VStack
 
 from flaza.config import LoginConfig
 
@@ -25,6 +25,11 @@ class LoginConfigForm:
         self._signer_url_input = Input(value=initial.signer_url, placeholder="https://sign.example.com")
         self._signer_token_input = Input(value=initial.signer_token, type="password")
         self._appinfo_input = Input(value=initial.appinfo_path)
+        self._custom_sign_switch = Switch("使用本地自定义签名", checked=initial.use_custom_sign_provider)
+        self._sign_provider_path_input = Input(value=initial.sign_provider_path)
+        self._sign_provider_entry_input = Input(value=initial.sign_provider_entry)
+        self._ipv6_switch = Switch("IPv6 连接", checked=initial.use_ipv6)
+        self._optimum_switch = Switch("Optimum 加速线路", checked=initial.use_optimum)
         self._error = Text("", role="danger")
 
         self.root = VStack(
@@ -38,6 +43,15 @@ class LoginConfigForm:
             self._signer_token_input,
             Text("appinfo 路径（custom 协议）"),
             self._appinfo_input,
+            Text("签名方式"),
+            self._custom_sign_switch,
+            Text("自定义签名文件路径（仓库外）"),
+            self._sign_provider_path_input,
+            Text("自定义签名入口函数"),
+            self._sign_provider_entry_input,
+            Text("网络"),
+            self._ipv6_switch,
+            self._optimum_switch,
             self._error,
             gap="12px",
             align="stretch",
@@ -60,6 +74,11 @@ class LoginConfigForm:
             signer_token=self._signer_token_input.value.strip(),
             use_custom=protocol == "custom",
             appinfo_path=self._appinfo_input.value.strip() or "./appinfo.json",
+            use_custom_sign_provider=self._custom_sign_switch.checked,
+            sign_provider_path=self._sign_provider_path_input.value.strip() or "../EulerOneBot/sign_provider.py",
+            sign_provider_entry=self._sign_provider_entry_input.value.strip() or "sign_provider",
+            use_ipv6=self._ipv6_switch.checked,
+            use_optimum=self._optimum_switch.checked,
         )
 
     def set_error(self, message: str) -> None:

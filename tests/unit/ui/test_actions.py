@@ -5,7 +5,8 @@ from pathlib import Path
 
 import httpx
 
-from flaza.ui.actions import _download_to_path, _looks_like_image
+from flaza.core.models import AudioElement, FileElement, VideoElement
+from flaza.ui.actions import _download_to_path, _looks_like_image, _outgoing_file_element
 
 
 def test_looks_like_image_accepts_common_formats() -> None:
@@ -21,6 +22,20 @@ def test_looks_like_image_rejects_other_files() -> None:
     assert _looks_like_image("/tmp/a.mp4") is False
     assert _looks_like_image("/tmp/a.txt") is False
     assert _looks_like_image("/tmp/a") is False
+
+
+def test_outgoing_file_element_maps_video_and_file() -> None:
+    video = _outgoing_file_element("/tmp/clip.MP4")
+    voice = _outgoing_file_element("/tmp/voice.amr")
+    archive = _outgoing_file_element("/tmp/资料.zip")
+
+    assert isinstance(video, VideoElement)
+    assert video.local_path == "/tmp/clip.MP4"
+    assert video.name == "clip.MP4"
+    assert isinstance(voice, AudioElement)
+    assert voice.local_path == "/tmp/voice.amr"
+    assert isinstance(archive, FileElement)
+    assert archive.file_name == "资料.zip"
 
 
 def test_download_to_path_streams_http_response(tmp_path: Path) -> None:

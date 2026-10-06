@@ -39,6 +39,25 @@ class ContactRepository:
         )
         await self._db.commit()
 
+    async def upsert_friends(self, friends: list[Friend]) -> None:
+        """批量写入好友资料。"""
+        if not friends:
+            return
+        now = int(time.time())
+        await self._db.executemany(
+            """
+            INSERT INTO friends (uid, uin, nickname, remark, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (uid) DO UPDATE SET
+                uin = excluded.uin,
+                nickname = excluded.nickname,
+                remark = excluded.remark,
+                updated_at = excluded.updated_at
+            """,
+            [(f.uid, f.uin, f.nickname, f.remark, now) for f in friends],
+        )
+        await self._db.commit()
+
     async def upsert_group(self, group: Group) -> None:
         """插入或更新一个群资料。"""
         await self._db.execute(
@@ -52,6 +71,25 @@ class ContactRepository:
                 updated_at = excluded.updated_at
             """,
             (group.group_id, group.name, group.member_count, group.owner_uid, int(time.time())),
+        )
+        await self._db.commit()
+
+    async def upsert_groups(self, groups: list[Group]) -> None:
+        """批量写入群资料。"""
+        if not groups:
+            return
+        now = int(time.time())
+        await self._db.executemany(
+            """
+            INSERT INTO groups (group_id, name, member_count, owner_uid, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (group_id) DO UPDATE SET
+                name = excluded.name,
+                member_count = excluded.member_count,
+                owner_uid = excluded.owner_uid,
+                updated_at = excluded.updated_at
+            """,
+            [(g.group_id, g.name, g.member_count, g.owner_uid, now) for g in groups],
         )
         await self._db.commit()
 

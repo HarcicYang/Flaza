@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 
 from neony.application import icons
@@ -12,7 +13,7 @@ from neony.dom import Animation, Color, Computed, Div, DOMElement, DomEvent, Sty
 
 from flaza.config import AppConfig
 from flaza.core.events import EventBus, LoginPhaseChanged
-from flaza.core.models import LoginPhase
+from flaza.core.models import LoginPhase, UserProfile
 from flaza.ui.actions import UiActions
 from flaza.ui.avatars import friend_avatar_url
 from flaza.ui.pages.home import HomePage
@@ -21,6 +22,8 @@ from flaza.ui.pages.plugin_manager import PluginManagerPage
 from flaza.ui.pages.settings import SettingsPage
 from flaza.ui.pages.setup import SetupPage
 from flaza.ui.state import UiStateStore
+
+logger = logging.getLogger(__name__)
 
 _TOOLBAR = Styles(
     display="flex",
@@ -192,6 +195,7 @@ class ShellView:
 
     async def _open_settings(self) -> None:
         config = self._actions.current_config()
+        profile = await self._load_self_profile()
         self._settings_return_screen = self._screen
         self._toolbar.container.clear()
         self._screen = "settings"
@@ -204,6 +208,8 @@ class ShellView:
                 self._render,
                 self._close_settings,
                 self._open_plugin_manager,
+                initial_profile=profile,
+                initial_other_clients=self._state.other_clients(),
             ).root
         )
         await self._render()
@@ -217,6 +223,7 @@ class ShellView:
     async def _close_plugin_manager(self) -> None:
         self._screen = "settings"
         config = self._actions.current_config()
+        profile = await self._load_self_profile()
         self._mount(
             SettingsPage(
                 self._actions,
@@ -226,9 +233,22 @@ class ShellView:
                 self._render,
                 self._close_settings,
                 self._open_plugin_manager,
+                initial_profile=profile,
+                initial_other_clients=self._state.other_clients(),
             ).root
         )
         await self._render()
+
+    async def _load_self_profile(self) -> UserProfile | None:
+        """打开设置前拉取一次个人资料；离线时回退为空。"""
+        info = self._state.self_info()
+        if info is None:
+            return None
+        try:
+            return await self._actions.fetch_user_profile(info.uid, info.uin)
+        except Exception:
+            logger.debug("获取个人资料失败", exc_info=True)
+            return None
 
     async def _close_settings(self) -> None:
         # 先播退场动画，播完再切回原页面。

@@ -130,6 +130,7 @@ class AudioElement(BaseModel):
     size: int = 0
     md5: bytes = b""
     cached_path: str = ""
+    local_path: str = ""
 
     @property
     def preview_text(self) -> str:
@@ -151,6 +152,7 @@ class VideoElement(BaseModel):
     file_key: str = ""
     md5: bytes = b""
     cached_path: str = ""
+    local_path: str = ""
 
     @property
     def preview_text(self) -> str:
@@ -239,6 +241,37 @@ class UnknownElement(BaseModel):
         return self.display or "[未知消息]"
 
 
+class CardElement(BaseModel):
+    """结构化卡片消息（JSON 卡片、服务卡片、按钮消息）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["card"] = "card"
+    title: str = ""
+    description: str = ""
+    source: str = ""
+    url: str = ""
+    preview_url: str = ""
+    raw_kind: str = ""
+
+    @property
+    def preview_text(self) -> str:
+        return f"[{self.title}]" if self.title else "[卡片消息]"
+
+
+class MarkdownElement(BaseModel):
+    """协议层 Markdown 消息。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["markdown"] = "markdown"
+    text: str = ""
+
+    @property
+    def preview_text(self) -> str:
+        return "[Markdown]"
+
+
 class PluginElement(BaseModel):
     """插件自定义消息元素。
 
@@ -270,6 +303,8 @@ MessageElement = Annotated[
     | PokeElement
     | QuoteElement
     | ForwardElement
+    | CardElement
+    | MarkdownElement
     | UnknownElement
     | PluginElement,
     Field(discriminator="kind"),

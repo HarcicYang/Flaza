@@ -32,6 +32,7 @@ coverage.xml
 .DS_Store
 
 # Runtime data (QQ signer / device files)
+sign_provider.py
 appinfo*.json
 device.json
 sig.bin
@@ -43,6 +44,7 @@ Thumbs.db
 appconfig.json
 flaza.db
 chat_cache.json
+emoji_cache.json
 media_cache/
 
 .account-backup/

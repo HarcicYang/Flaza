@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from lagrange.client.events.friend import FriendMessage
@@ -12,6 +13,7 @@ from flaza.core.models import (
     AtAllElement,
     AtElement,
     AudioElement,
+    CardElement,
     EmojiElement,
     FileElement,
     ForwardElement,
@@ -19,6 +21,7 @@ from flaza.core.models import (
     GroupChat,
     GroupMemberRole,
     ImageElement,
+    MarkdownElement,
     MarketFaceElement,
     Message,
     MessageElement,
@@ -55,7 +58,7 @@ def friend_message_to_domain(event: FriendMessage, self_uin: int) -> Message:
         sender_name=str(event.from_uin),
         seq=event.seq,
         client_seq=event.client_seq,
-        rand=event.msg_id,
+        rand=event.rand,
         timestamp=event.timestamp,
         elements=_convert_elements(event.msg_chain),
         from_self=from_self,
@@ -111,6 +114,32 @@ def lagrange_file_to_domain(element: lagrange_elems.File) -> FileElement:
     )
 
 
+def lagrange_video_to_domain(element: lagrange_elems.Video) -> VideoElement:
+    """把 lagrange 视频元素转换为领域模型，接收与发送共用。"""
+    return VideoElement(
+        url=element.url,
+        name=element.name,
+        size=element.size,
+        width=element.width,
+        height=element.height,
+        time=element.time,
+        file_key=element.file_key,
+        md5=element.md5,
+    )
+
+
+def lagrange_audio_to_domain(element: lagrange_elems.Audio) -> AudioElement:
+    """把 lagrange 语音元素转换为领域模型，接收与发送共用。"""
+    return AudioElement(
+        url=element.url,
+        time=element.time,
+        file_key=element.file_key,
+        name=element.name,
+        size=element.size,
+        md5=element.md5,
+    )
+
+
 def _convert_elements(msg_chain: list[Any], uid_to_nickname: dict[str, str] | None = None) -> list[MessageElement]:
     """把 lagrange 元素精确映射为领域元素。
 
@@ -143,29 +172,9 @@ def _convert_elements(msg_chain: list[Any], uid_to_nickname: dict[str, str] | No
                 )
             )
         elif isinstance(element, lagrange_elems.Audio):
-            elements.append(
-                AudioElement(
-                    url=element.url,
-                    time=element.time,
-                    file_key=element.file_key,
-                    name=element.name,
-                    size=element.size,
-                    md5=element.md5,
-                )
-            )
+            elements.append(lagrange_audio_to_domain(element))
         elif isinstance(element, lagrange_elems.Video):
-            elements.append(
-                VideoElement(
-                    url=element.url,
-                    name=element.name,
-                    size=element.size,
-                    width=element.width,
-                    height=element.height,
-                    time=element.time,
-                    file_key=element.file_key,
-                    md5=element.md5,
-                )
-            )
+            elements.append(lagrange_video_to_domain(element))
         elif isinstance(element, lagrange_elems.File):
             elements.append(lagrange_file_to_domain(element))
         elif isinstance(element, lagrange_elems.Poke):
@@ -184,8 +193,76 @@ def _convert_elements(msg_chain: list[Any], uid_to_nickname: dict[str, str] | No
             )
         elif isinstance(element, lagrange_elems.MulitMsg):
             elements.append(ForwardElement(resid=element.resid or "", file_name=element.file_name))
+        elif isinstance(element, lagrange_elems.Markdown):
+            elements.append(MarkdownElement(text=element.content))
+        elif isinstance(element, lagrange_elems.Json):
+            elements.append(_json_card(element))
+        elif isinstance(element, lagrange_elems.Keyboard):
+            elements.append(_keyboard_card(element))
         else:
             original_kind = str(getattr(element, "type", type(element).__name__))
             display = _UNKNOWN_ELEMENT_DISPLAY.get(original_kind) or getattr(element, "display", "") or "[未知消息]"
             elements.append(UnknownElement(original_kind=original_kind, display=display))
     return elements
+
+
+def _first_text(data: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _first_url(data: dict[str, Any], *keys: str) -> str:
+    value = _first_text(data, *keys)
+    return value if value.startswith(("http://", "https://")) else ""
+
+
+def _json_card(element: Any) -> CardElement:
+    """从 QQ JSON 卡片中提取标题、摘要、来源与跳转链接。"""
+    raw_kind = str(getattr(element, "type", "json"))
+    try:
+        data = json.loads(element.raw)
+    except Exception:
+        data = None
+    if not isinstance(data, dict):
+        return CardElement(raw_kind=raw_kind, title=_UNKNOWN_ELEMENT_DISPLAY.get(raw_kind, "卡片消息"))
+
+    meta = data.get("meta")
+    detail: dict[str, Any] = {}
+    if isinstance(meta, dict):
+        detail = next((item for item in meta.values() if isinstance(item, dict)), {})
+    title = _first_text(detail, "title") or _first_text(data, "prompt", "desc")
+    description = _first_text(detail, "desc", "summary") or _first_text(data, "desc")
+    source = _first_text(detail, "source") or _first_text(data, "desc") or _first_text(data, "app")
+    url = _first_url(detail, "jumpUrl", "qqdocurl", "url") or _first_url(data, "jumpUrl", "url")
+    preview = _first_url(detail, "preview", "icon", "thumbUrl")
+    return CardElement(
+        raw_kind=raw_kind,
+        title=title[:120],
+        description=description[:300],
+        source=source[:80],
+        url=url,
+        preview_url=preview,
+    )
+
+
+def _keyboard_card(element: Any) -> CardElement:
+    """把按钮消息的按钮文案汇总为一张可读卡片。"""
+    labels: list[str] = []
+    for keyboard in getattr(element, "content", None) or []:
+        for row in getattr(keyboard, "rows", None) or []:
+            for button in getattr(row, "buttons", None) or []:
+                render = getattr(button, "render_data", None)
+                label = getattr(render, "label", "") if render is not None else ""
+                if isinstance(label, str) and label.strip():
+                    labels.append(label.strip())
+    return CardElement(raw_kind="keyboard", title="按钮消息", description=" / ".join(labels[:8]))
+
+
+def lagrange_elements_to_domain(
+    msg_chain: list[Any], uid_to_nickname: dict[str, str] | None = None
+) -> list[MessageElement]:
+    """把 hiro-qq 元素链转换为领域元素；供转发内容等非事件路径使用。"""
+    return _convert_elements(msg_chain, uid_to_nickname=uid_to_nickname)

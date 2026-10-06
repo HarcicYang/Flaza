@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from neony.application.elements import Audio as MediaAudio
-from neony.application.elements import Button
+from neony.application.elements import Button, Markdown
 from neony.application.elements import Video as MediaVideo
 from neony.application.theme import stub
 from neony.application.urls import data_url, local_url
@@ -19,10 +19,12 @@ from flaza.core.models import (
     AtAllElement,
     AtElement,
     AudioElement,
+    CardElement,
     EmojiElement,
     FileElement,
     ForwardElement,
     ImageElement,
+    MarkdownElement,
     MarketFaceElement,
     Message,
     MessageElement,
@@ -40,6 +42,8 @@ from flaza.ui.components.image_viewer import ImagePreview
 ImageClickHandler = Callable[[ImagePreview], Awaitable[None]]
 FileDownloadHandler = Callable[[FileElement], Awaitable[None]]
 ReactionClickHandler = Callable[[str], Awaitable[None]]
+ForwardClickHandler = Callable[[ForwardElement], Awaitable[None]]
+CardClickHandler = Callable[[CardElement], Awaitable[None]]
 
 _INLINE_ELEMENT_TYPES = (TextElement, AtElement, AtAllElement)
 
@@ -159,6 +163,8 @@ def build_message_content(
     on_reaction_click: ReactionClickHandler | None = None,
     self_uid: str | None = None,
     plugin_registry: PluginExtensionRegistry | None = None,
+    on_forward_click: ForwardClickHandler | None = None,
+    on_card_click: CardClickHandler | None = None,
 ) -> DOMElement:
     """把消息元素渲染为 MessageBubble 的 content。
 
@@ -179,6 +185,8 @@ def build_message_content(
                         on_image_click,
                         on_file_download,
                         plugin_registry,
+                        on_forward_click,
+                        on_card_click,
                     )
                 )
                 index += 1
@@ -191,6 +199,8 @@ def build_message_content(
                     on_image_click,
                     on_file_download,
                     plugin_registry,
+                    on_forward_click,
+                    on_card_click,
                 )
             )
             index += 1
@@ -247,6 +257,8 @@ def _build_element(
     on_image_click: ImageClickHandler | None,
     on_file_download: FileDownloadHandler | None,
     plugin_registry: PluginExtensionRegistry | None,
+    on_forward_click: ForwardClickHandler | None = None,
+    on_card_click: CardClickHandler | None = None,
 ) -> DOMElement:
     if isinstance(element, TextElement):
         return Span(container=[element.text], styles=_TEXT)
@@ -345,7 +357,21 @@ def _build_element(
         return _quote(element, from_self)
 
     if isinstance(element, ForwardElement):
-        return _card("聊天记录", element.file_name or "合并转发消息")
+        card = _card("聊天记录", element.file_name or "合并转发消息")
+        if on_forward_click is not None:
+            card.bubble_events = True
+
+            async def handler(_event: DomEvent) -> None:
+                await on_forward_click(element)
+
+            card.on_click(handler)
+        return card
+
+    if isinstance(element, MarkdownElement):
+        return Markdown(element.text).build()
+
+    if isinstance(element, CardElement):
+        return _structured_card(element, on_card_click)
 
     if isinstance(element, PluginElement):
         return _build_plugin_element(element, plugin_registry)
@@ -482,6 +508,28 @@ def _card(title: str, subtitle: str = "") -> Div:
     if subtitle:
         children.append(Span(container=[subtitle], styles=_CARD_SUBTITLE))
     return Div(styles=_CARD, container=children)
+
+
+def _structured_card(element: CardElement, on_card_click: CardClickHandler | None) -> DOMElement:
+    """渲染结构化卡片；带链接时整卡可点击并打开系统浏览器。"""
+    children: list[DOMElement] = []
+    if element.title:
+        children.append(Span(container=[element.title], styles=_CARD_TITLE))
+    if element.description:
+        children.append(Span(container=[element.description], styles=_CARD_SUBTITLE))
+    if element.source:
+        children.append(Span(container=[element.source], styles=_CARD_SUBTITLE))
+    if not children:
+        children.append(Span(container=["[卡片消息]"], styles=_CARD_TITLE))
+    card = Div(styles=_CARD, container=children)
+    if element.url and on_card_click is not None:
+        card.bubble_events = True
+
+        async def handler(_event: DomEvent) -> None:
+            await on_card_click(element)
+
+        card.on_click(handler)
+    return card
 
 
 def _format_size(size: int) -> str:

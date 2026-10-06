@@ -1,7 +1,7 @@
 # Flaza
 
 非官方 QQ 桌面客户端，使用 Python编写，由
-[lagrange-python](https://github.com/LagrangeDev/lagrange-python) [^1] 和
+[hiro-qq](https://github.com/HarcicYang/hiro-qq) [^1] 和
 [Neony](https://github.com/HarcicYang/Neony) 驱动。
 
 目前项目仍处于早期开发阶段，功能与数据格式可能会继续调整。
@@ -38,6 +38,11 @@ uv run flaza
 首次启动时会进入登录配置页，填写 `uin`、协议、签名服务地址与 token；
 保存后应用会自动重启并尝试登录， 已有设备数据时静默登录，否则在页面中展示二维码
 扫码确认后进入主界面。
+
+签名默认使用仓库外的本地实现（默认 `../EulerOneBot/sign_provider.py`，
+可在设置中修改路径或关闭），文件缺失时回退到签名服务地址。首次运行时如果
+本地缺少 `device.json` / `sig.bin`，会从 `../lagrange-python` 迁移同一账号
+的登录信息；迁移只补齐缺失文件，不覆盖已有数据。
 
 ## 插件系统
 
@@ -113,6 +118,7 @@ UI 状态层把事件投影到 Neony 的可绑定信号，插件则通过事件�
 - `appconfig.json`：登录、协议、路径、窗口与主题配置
 - `flaza.db`：联系人、会话、消息、群成员与已读游标
 - `chat_cache.json`：最近消息快照，用于跨启动复用的快速会话切换
+- `emoji_cache.json`：最近使用过的商城表情
 - `plugin_state.json`：插件启停状态、设置与 KV
 - `media_cache/`：下载到本地的消息媒体文件
 
@@ -140,8 +146,8 @@ GPL-3.0，见 [LICENSE](LICENSE)。
   受限等风险。
 - 插件默认拥有当前用户完整权限，安装第三方插件前请确认来源与代码内容。
 
-[^1]: 本仓库依赖中的 lagrange-python 包指向
-[作者自己的 fork](https://github.com/HarcicYang/lagrange-python)，其中包含本项目
-所需而上游尚未提供的实现；直接替换为 LagrangeDev 原版包可能无法正常运行。
+[^1]: hiro-qq 是源自
+[lagrange-python](https://github.com/LagrangeDev/lagrange-python) 的 NTQQ 协议
+实现，导入命名空间仍为 `lagrange`；本仓库通过 git 依赖跟进 hiro-qq 的最新提交。
 
 [^2]: 部分环境下，安装相关依赖库可能需要额外配置 openssl 与 rust 开发环境。

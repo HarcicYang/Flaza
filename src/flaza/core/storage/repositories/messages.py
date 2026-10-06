@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import aiosqlite
@@ -65,6 +66,52 @@ class MessageRepository:
         if row is None:
             raise RuntimeError("消息写入后无法定位")
         return int(row["id"])
+
+    async def insert_many(self, messages: Sequence[Message]) -> int:
+        """批量写入消息；重复消息忽略，返回尝试写入的数量。
+
+        批量路径把 N 次 commit 压缩为一次 executemany，再只为确实存在待定
+        回应的群消息执行反应合并。
+        """
+        if not messages:
+            return 0
+        rows = []
+        for message in messages:
+            chat_kind, chat_id = _chat_columns(message.chat)
+            rows.append(
+                (
+                    chat_kind,
+                    chat_id,
+                    message.sender_uin,
+                    message.sender_uid,
+                    message.seq,
+                    message.client_seq,
+                    message.rand,
+                    message.timestamp,
+                    int(message.from_self),
+                    int(message.recalled),
+                    message.text,
+                    encode_message(message),
+                )
+            )
+        await self._db.executemany(
+            """
+            INSERT OR IGNORE INTO messages
+                (chat_kind, chat_id, sender_uin, sender_uid, seq, client_seq,
+                 rand, timestamp, from_self, recalled, text, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        await self._db.commit()
+
+        group_seqs: dict[int, list[int]] = {}
+        for message in messages:
+            if isinstance(message.chat, GroupChat) and message.seq:
+                group_seqs.setdefault(message.chat.group_id, []).append(message.seq)
+        for group_id, seqs in group_seqs.items():
+            await self._apply_pending_reaction_batch(group_id, seqs)
+        return len(messages)
 
     async def list_recent(self, chat: ChatTarget, limit: int = 50) -> list[StoredMessage]:
         """返回最近 limit 条消息，按时间正序（可直接用于聊天流）。"""
@@ -336,6 +383,24 @@ class MessageRepository:
             (chat.group_id, seq),
         )
         await self._db.commit()
+
+    async def _apply_pending_reaction_batch(self, group_id: int, seqs: Sequence[int]) -> None:
+        """只为确实有待定回应的群消息合并反应，避免逐条空查询。"""
+        unique = list(dict.fromkeys(seqs))
+        if not unique:
+            return
+        placeholders = ",".join("?" for _ in unique)
+        cursor = await self._db.execute(
+            f"""
+            SELECT DISTINCT seq
+            FROM pending_group_reactions
+            WHERE group_id = ? AND seq IN ({placeholders})
+            """,
+            (group_id, *unique),
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            await self._apply_pending_reactions(GroupChat(group_id=group_id), int(row["seq"]))
 
     async def mark_recalled(self, chat: ChatTarget, seq: int) -> bool:
         """把指定消息标记为已撤回，返回是否更新成功。"""

@@ -28,6 +28,7 @@ from flaza.core.events import (
     LoginPhaseChanged,
     MessageRecalled,
     MessageReceived,
+    RequestResolved,
     Subscription,
 )
 from flaza.core.models import LoginPhase
@@ -64,7 +65,11 @@ class ApplicationRuntime:
         self.bus = EventBus()
         self.plugin_registry = PluginExtensionRegistry()
         self.plugins = PluginHost(self)
-        self.state = UiStateStore(self.storage, chat_cache_path=config.paths.chat_cache_path)
+        self.state = UiStateStore(
+            self.storage,
+            chat_cache_path=config.paths.chat_cache_path,
+            emoji_cache_path=config.paths.emoji_cache_path,
+        )
         self.actions = UiActions(self)
         self.shell = ShellView(self.state, self.actions, self.bus, self.config, self.render)
 
@@ -228,6 +233,7 @@ class ApplicationRuntime:
             self.bus.subscribe(GroupAdminChanged, group_event_service.on_group_admin_changed),
             self.bus.subscribe(LoginPhaseChanged, self._sync_contacts_on_online),
             self.bus.subscribe(LoginPhaseChanged, self._sync_messages_on_online),
+            self.bus.subscribe(RequestResolved, self._on_request_resolved),
         ]
 
         if not self._state_wired:
@@ -267,6 +273,12 @@ class ApplicationRuntime:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
+    async def _on_request_resolved(self, event: RequestResolved) -> None:
+        """好友申请通过后立即刷新联系人列表。"""
+        if not event.refresh_contacts or self._contact_service is None:
+            return
+        await self._contact_service.sync()
+
     async def _cancel_background_tasks(self) -> None:
         for task in list(self._background_tasks):
             task.cancel()
@@ -281,6 +293,7 @@ class ApplicationRuntime:
         await self.render()
         try:
             await self._message_service.sync_offline_messages()
+            await self._message_service.repair_legacy_images()
         finally:
             self.state.sync_in_progress.set(False)
             await self.render()

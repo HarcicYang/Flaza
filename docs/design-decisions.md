@@ -196,3 +196,25 @@
 - M3 示例插件：`group-notices/` 演示接管群事件并写入详细播报；
   `plus-one/` 演示消息快捷动作与整元素序列复读；
   `custom-theme/` 演示用 `ctx.apply_theme` 切换内置主题。
+
+### 10. 签名、登录信息与加载并发
+
+- 自定义签名沿用 EulerOneBot 的工厂约定：用户在仓库外维护
+  `sign_provider.py`，Flaza 默认启用并读取 `../EulerOneBot/sign_provider.py`，
+  路径与入口可在设置页修改；文件缺失或加载失败时回退到签名服务地址。
+  该文件属于本机私有凭据，禁止提交进仓库（`.gitignore` 已覆盖）。
+- 首次运行时若 Flaza 的 `device.json` / `sig.bin` 缺失，会从
+  `paths.login_info_source_dir`（默认 `../lagrange-python`）迁移同一 uin 的
+  登录信息；只补齐缺失文件，不覆盖已有状态，源账号不匹配时跳过。
+- 消息补拉采用有界并发：单会话按 50 条一页并发拉取（默认 6 路），按分页
+  顺序合并，单页失败只记录日志；跨会话离线补拉默认 4 路并发，媒体缓存
+  沿用既有的 8 路并发与去重。
+- 批量写入走 `INSERT OR IGNORE` + 单次 `executemany`，群表情回应只为真正
+  存在待定记录的消息回填；群成员同步默认 3 路并发并批量 upsert。
+- 所有并发只复用进程内的 asyncio 事件循环与既有协议连接，不新增监听端口、
+  独立服务或常驻进程。
+- 最近使用的商城表情保存在 `emoji_cache.json`（最多 24 个，去重），输入区
+  通过 Neony `Popover` 展示；文件属于运行时数据，不进入仓库。
+- 图片消息：QQ 会为同一张图同时下发旧 `gchatpic` 元素与现代 NT 元素，
+  hiro-qq 解码器优先 NT 元素以换取带 rkey 的多媒体地址；Flaza 登录后会把
+  库中仍指向 `gchat.qpic.cn` 的图片消息按 seq 重取一次、替换入库并重新缓存。

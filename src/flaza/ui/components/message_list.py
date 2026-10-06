@@ -15,24 +15,25 @@ from neony.application.elements import (
     Icon,
     MessageBubble,
     NoticeBubble,
-    Progress,
     StickToBottom,
 )
 from neony.application.theme import stub
-from neony.dom import Border, Computed, Div, DOMElement, DomEvent, Signal, Span, Styles, Transition
+from neony.dom import Animation, Border, Computed, DOMElement, DomEvent, Signal, Span, Styles, Transition
 
 from flaza.core.models import (
     ChatTarget,
+    EmojiElement,
     FileElement,
     GroupChat,
     GroupMemberRole,
+    MarketFaceElement,
     Message,
     StoredMessage,
 )
 from flaza.plugins.registry import PluginExtensionRegistry
 from flaza.ui.avatars import friend_avatar_url
 from flaza.ui.components.image_viewer import ImagePreview
-from flaza.ui.components.message_content import build_message_content
+from flaza.ui.components.message_content import CardClickHandler, ForwardClickHandler, build_message_content
 from flaza.ui.components.reaction_picker import ReactionPicker
 from flaza.ui.state import ChatNotice, UiStateStore
 
@@ -69,16 +70,6 @@ _JUMP_BUTTON = Styles(
     cursor="pointer",
 )
 
-_PENDING_CONTENT = Styles(
-    display="flex",
-    flex_direction="column",
-    align_items="flex-end",
-    gap="6px",
-    max_width="100%",
-)
-
-_SENDING_PROGRESS = Styles(width="68px", height="4px")
-
 
 @dataclass
 class _RenderedItem:
@@ -89,6 +80,7 @@ class _RenderedItem:
     role: GroupMemberRole
     avatar_src: str | None
     bubble: MessageBubble | None = None
+    base_styles: Styles | None = None
 
 
 class MessageList:
@@ -102,6 +94,8 @@ class MessageList:
         on_reaction_selected: Callable[[StoredMessage, str, int, bool], Awaitable[None]] | None = None,
         on_load_older: Callable[[], Awaitable[None]] | None = None,
         on_file_download: Callable[[FileElement], Awaitable[None]] | None = None,
+        on_forward_click: ForwardClickHandler | None = None,
+        on_card_click: CardClickHandler | None = None,
         plugin_registry: PluginExtensionRegistry | None = None,
     ) -> None:
         self._state = state
@@ -110,6 +104,8 @@ class MessageList:
         self._on_message_action = on_message_action
         self._on_reaction_selected = on_reaction_selected
         self._on_file_download = on_file_download
+        self._on_forward_click = on_forward_click
+        self._on_card_click = on_card_click
         self._loading_older = False
         self._items: dict[str, _RenderedItem] = {}
         self._ordered_keys: list[str] = []
@@ -153,6 +149,7 @@ class MessageList:
                 role=role,
                 avatar_src=avatar_src,
                 bubble=bubble,
+                base_styles=element.styles,
             )
             ordered_keys.append(key)
         self._prebuilt_items[chat.key] = (ordered_keys, items)
@@ -212,7 +209,14 @@ class MessageList:
             self._update_existing(timeline, chat)
             return
 
-        # 乐观发送确认后：只移除尾部 pending 气泡，真实消息随下一次刷新追加。
+        # 乐观气泡被真实消息原位替换：长度不变，只有尾部 key 变化。
+        if len(desired_keys) == len(old_keys) and len(old_keys) > 0 and desired_keys[:-1] == old_keys[:-1]:
+            self._remove_last()
+            self._append_item(desired_keys[-1], item_by_key[desired_keys[-1]], chat)
+            self._update_existing(timeline, chat)
+            return
+
+        # 时间线缩短时从尾部移除多余元素。
         if len(desired_keys) < len(old_keys) and old_keys[: len(desired_keys)] == desired_keys:
             while len(self._ordered_keys) > len(desired_keys):
                 key = self._ordered_keys.pop()
@@ -267,8 +271,33 @@ class MessageList:
                 role=role,
                 avatar_src=avatar_src,
                 bubble=bubble,
+                base_styles=element.styles,
             )
             self._ordered_keys.append(key)
+
+    def apply_selection(self) -> None:
+        """按 UiStateStore 的多选集合高亮/复原消息气泡。"""
+        selected_ids = {stored.id for stored in self._state.selected_messages()}
+        for key, entry in self._items.items():
+            if entry.base_styles is None or not key.startswith("message:"):
+                continue
+            try:
+                item_id = int(key.split(":", 1)[1])
+            except ValueError:
+                continue
+            # 入场动画挂在 element.styles 上；恢复基础样式时必须保留，
+            # 否则 HomePage 的 apply_selection 会在渲染前把动画抹掉。
+            animation = entry.element.styles.animation
+            if item_id in selected_ids:
+                entry.element.styles = entry.base_styles.model_copy(
+                    update={
+                        "box_shadow": "0 0 0 2px var(--color-accent)",
+                        "border_radius": "10px",
+                        "animation": animation,
+                    }
+                )
+            else:
+                entry.element.styles = entry.base_styles.model_copy(update={"animation": animation})
 
     def _ensure_placeholder(self, text: str) -> None:
         if self._placeholder is not None:
@@ -298,6 +327,10 @@ class MessageList:
     def _append_item(self, key: str, item: StoredMessage | ChatNotice, chat: ChatTarget) -> None:
         self._remove_placeholder()
         element, kind, message, role, avatar_src, bubble = self._build_item(item, chat)
+        base_styles = element.styles
+        animation = self._entry_animation(key, kind, message)
+        if animation is not None:
+            element.styles = base_styles.model_copy(update={"animation": animation})
         self.root.container.append(element)
         self._items[key] = _RenderedItem(
             key=key,
@@ -307,8 +340,35 @@ class MessageList:
             role=role,
             avatar_src=avatar_src,
             bubble=bubble,
+            base_styles=base_styles,
         )
         self._ordered_keys.append(key)
+
+    @staticmethod
+    def _entry_animation(key: str, kind: str, message: Message | None) -> Animation | None:
+        """给尾部新插入的消息/灰条加一段入场动画；历史插入不经过这里。"""
+        if kind == "message" and message is not None:
+            if message.from_self:
+                if not key.startswith("message:-"):
+                    # 真实消息接替乐观气泡时原位替换，不再播放第二次动画。
+                    return None
+                return Animation(
+                    name="flaza-msg-out",
+                    duration="0.32s",
+                    timing="cubic-bezier(0.22, 1, 0.36, 1)",
+                    delay="0.06s",
+                    fill_mode="backwards",
+                )
+            return Animation(
+                name="flaza-msg-in",
+                duration="0.32s",
+                timing="cubic-bezier(0.22, 1, 0.36, 1)",
+                delay="0.06s",
+                fill_mode="backwards",
+            )
+        if kind in ("notice", "recalled"):
+            return Animation(name="flaza-notice-in", duration="0.22s", timing="ease-out")
+        return None
 
     def _prepend_item(self, index: int, key: str, item: StoredMessage | ChatNotice, chat: ChatTarget) -> None:
         self._remove_placeholder()
@@ -332,6 +392,14 @@ class MessageList:
         self._items.pop(key, None)
         if self.root.container:
             self.root.container.pop(0)
+
+    def _remove_last(self) -> None:
+        if not self._ordered_keys:
+            return
+        key = self._ordered_keys.pop()
+        self._items.pop(key, None)
+        if self.root.container:
+            self.root.container.pop()
 
     def _update_existing(self, timeline: list[StoredMessage | ChatNotice], chat: ChatTarget) -> None:
         by_key = {self._item_key(item): item for item in timeline}
@@ -427,6 +495,8 @@ class MessageList:
             on_reaction_click=self._make_reaction_pill_handler(stored, self_uid),
             self_uid=self_uid,
             plugin_registry=self._plugin_registry,
+            on_forward_click=self._on_forward_click,
+            on_card_click=self._on_card_click,
         )
         bubble.set_content(new_content)
 
@@ -481,17 +551,29 @@ class MessageList:
 
         role = self._resolve_role(chat, message)
         is_pending = item.id < 0
+        self_info = self._state.self_info()
+        self_uid = self_info.uid if self_info else None
         menu_items: list[tuple[str, str]] = []
-        if not is_pending and message.text:
+        if message.text:
             menu_items.append(("copy", "复制文本"))
-        if not is_pending and any(isinstance(item, FileElement) for item in message.elements):
+        if any(isinstance(item, FileElement) for item in message.elements):
             menu_items.append(("download", "下载文件"))
+        if not message.from_self and message.sender_uin:
+            menu_items.append(("poke", "戳一戳"))
+        if not message.from_self and (message.sender_uid or message.sender_uin):
+            menu_items.append(("profile", "资料卡"))
+        if isinstance(chat, GroupChat) and message.seq and message.rand:
+            self_role = self._state.group_roles().get(f"{chat.group_id}:{self_uid}", GroupMemberRole.MEMBER)
+            if self_role in (GroupMemberRole.OWNER, GroupMemberRole.ADMIN):
+                menu_items.append(("essence", "设为精华"))
+        menu_items.append(("forward", "转发"))
+        menu_items.append(("select", "多选"))
+        if any(isinstance(item, (EmojiElement, MarketFaceElement)) for item in message.elements):
+            menu_items.append(("send_face", "发送表情"))
         if message.from_self:
             menu_items.append(("recall", "撤回"))
         # 回复按钮通过 hover actions 展示；表情选择器与气泡同树，保证
         # 刷新重建后仍保留右键菜单和 quick actions 的内部事件路由。
-        self_info = self._state.self_info()
-        self_uid = self_info.uid if self_info else None
         stored = item
         actions: list[Icon | tuple[str, str]] = [] if is_pending else [icons.chat, icons.favorite]
         if self._plugin_registry is not None:
@@ -508,10 +590,9 @@ class MessageList:
             on_reaction_click=self._make_reaction_pill_handler(stored, self_uid),
             self_uid=self_uid,
             plugin_registry=self._plugin_registry,
+            on_forward_click=self._on_forward_click,
+            on_card_click=self._on_card_click,
         )
-        if is_pending:
-            sending = Progress(indeterminate=True).reset_styles(_SENDING_PROGRESS)
-            content = Div(styles=_PENDING_CONTENT, container=[content, sending.build()])
         bubble = MessageBubble(
             text=message.text,
             content=content,

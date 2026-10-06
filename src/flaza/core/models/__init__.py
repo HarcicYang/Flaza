@@ -3,10 +3,12 @@
 from flaza.core.models.account import (
     ConnectionState,
     LoginPhase,
+    OnlineClient,
     QrCodeData,
     QrCodeState,
     SelfInfo,
     SilentLoginResult,
+    UserProfile,
 )
 from flaza.core.models.chat import ChatTarget, FriendChat, GroupChat
 from flaza.core.models.contact import Friend, Group, GroupMember, GroupMemberRole
@@ -14,10 +16,12 @@ from flaza.core.models.message import (
     AtAllElement,
     AtElement,
     AudioElement,
+    CardElement,
     EmojiElement,
     FileElement,
     ForwardElement,
     ImageElement,
+    MarkdownElement,
     MarketFaceElement,
     Message,
     MessageElement,
@@ -31,12 +35,14 @@ from flaza.core.models.message import (
     VideoElement,
     quote_preview_text,
 )
+from flaza.core.models.request import PendingRequest, RequestKind
 from flaza.core.models.session import Session
 
 __all__ = [
     "AtAllElement",
     "AtElement",
     "AudioElement",
+    "CardElement",
     "ChatTarget",
     "ConnectionState",
     "EmojiElement",
@@ -50,21 +56,26 @@ __all__ = [
     "GroupMemberRole",
     "ImageElement",
     "LoginPhase",
+    "MarkdownElement",
     "MarketFaceElement",
     "Message",
     "MessageElement",
     "MessageReaction",
+    "OnlineClient",
+    "PendingRequest",
     "PluginElement",
     "PokeElement",
     "QrCodeData",
     "QrCodeState",
     "QuoteElement",
+    "RequestKind",
     "SelfInfo",
     "Session",
     "SilentLoginResult",
     "StoredMessage",
     "TextElement",
     "UnknownElement",
+    "UserProfile",
     "VideoElement",
     "quote_preview_text",
 ]

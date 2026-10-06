@@ -12,6 +12,8 @@ from flaza.core.storage import Storage
 
 logger = logging.getLogger(__name__)
 
+_GROUP_SYNC_CONCURRENCY = 3
+
 
 class ContactService:
     """从 QQ 协议拉取联系人并写入存储。"""
@@ -23,13 +25,13 @@ class ContactService:
 
     async def sync(self) -> None:
         """全量同步好友和群资料。"""
-        friends = await self._qq.fetch_friends()
-        groups = await self._qq.fetch_groups()
+        friends, groups = await asyncio.gather(
+            self._qq.fetch_friends(),
+            self._qq.fetch_groups(),
+        )
 
-        for friend in friends:
-            await self._storage.contacts.upsert_friend(friend)
-        for group in groups:
-            await self._storage.contacts.upsert_group(group)
+        await self._storage.contacts.upsert_friends(friends)
+        await self._storage.contacts.upsert_groups(groups)
 
         self._bus.publish(ContactsUpdated(friends=friends, groups=groups))
 
@@ -49,16 +51,24 @@ class ContactService:
         return members
 
     async def sync_group_members(self) -> None:
-        """后台同步全部群的成员身份缓存。"""
-        all_members = []
-        for group in await self._storage.contacts.list_groups():
-            try:
-                members = await self._qq.fetch_group_members(group.group_id)
-            except Exception:
-                logger.exception("群成员同步失败: %s", group.group_id)
+        """后台并发同步全部群的成员身份缓存。"""
+        groups = await self._storage.contacts.list_groups()
+        semaphore = asyncio.Semaphore(_GROUP_SYNC_CONCURRENCY)
+
+        async def sync_group(group_id: int) -> list[GroupMember]:
+            async with semaphore:
+                return await self._qq.fetch_group_members(group_id)
+
+        results = await asyncio.gather(
+            *(sync_group(group.group_id) for group in groups),
+            return_exceptions=True,
+        )
+        all_members: list[GroupMember] = []
+        for group, result in zip(groups, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.warning("群成员同步失败: %s: %r", group.group_id, result)
                 continue
-            for member in members:
-                await self._storage.members.upsert(member)
-            all_members.extend(members)
+            await self._storage.members.upsert_many(result)
+            all_members.extend(result)
         if all_members:
             self._bus.publish(GroupMembersUpdated(members=all_members))
