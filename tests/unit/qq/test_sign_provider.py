@@ -10,7 +10,7 @@ import pytest
 
 from flaza.config import LoginConfig
 from flaza.qq.clients import _build_sign, _load_custom_sign_factory
-from flaza.qq.sign_provider import _MODULE_NAME, load_sign_provider
+from flaza.qq.custom_sign import _MODULE_NAME, load_sign_provider
 
 PROVIDER_SOURCE = "\n".join(
     [

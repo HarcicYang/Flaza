@@ -75,7 +75,7 @@ from flaza.qq.convert import (
     lagrange_image_to_domain,
     lagrange_video_to_domain,
 )
-from flaza.qq.sign_provider import SignFactory, load_sign_provider
+from flaza.qq.custom_sign import SignFactory, load_sign_provider
 
 logger = logging.getLogger(__name__)
 
